@@ -36,7 +36,7 @@ def create_optimization_animation(F_history, filename):
     f_boundary = interp1d(
         sorted_F[:, 0],
         sorted_F[:, 1],
-        kind="cubic",  # Use cubic interpolation for smoother curve
+        kind="linear",  # Use cubic interpolation for smoother curve
         bounds_error=False,
         fill_value="extrapolate",
     )
@@ -275,7 +275,7 @@ def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=Fa
     xvec = np.linspace(-8, 8, 100)
     yvec = np.linspace(-8, 8, 100)
     
-    cmap = plt.colormaps.get_cmap('viridis')
+    cmap = plt.colormaps.get_cmap('inferno')
     norm = colors.TwoSlopeNorm(vmin=-0.23, vcenter=0, vmax=0.23)
     
     def update(frame):
