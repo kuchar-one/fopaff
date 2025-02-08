@@ -260,14 +260,13 @@ def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=Fa
     xvec = np.linspace(-8, 8, 100)
     yvec = np.linspace(-8, 8, 100)
     
-    cmap = plt.colormaps.get_cmap('RdBu_r')
+    cmap = plt.colormaps.get_cmap('viridis')
     norm = colors.TwoSlopeNorm(vmin=-0.23, vcenter=0, vmax=0.23)
     
     def update(frame):
         # Clear previous plots
         ax1.clear()
         ax2.clear()
-        print(frame)
         # Get current state and fidelities
         state = sorted_states[frame]
         cf = sorted_catfids[frame]
@@ -297,11 +296,13 @@ def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=Fa
         return (cont1, cont2)
     
     # Use tqdm to display a progress bar
-    with tqdm(total=len(sorted_states), desc="Generating animation") as pbar:
-        ani = FuncAnimation(fig, lambda frame: update(frame), frames=len(sorted_states), interval=200, blit=True)
-        
-        for _ in range(len(sorted_states)):
+    with tqdm(total=len(sorted_states), desc="Generating boundary state animation") as pbar:
+        def update_with_progress(frame):
+            update(frame)
             pbar.update(1)
+            return []
+        
+        ani = FuncAnimation(fig, update_with_progress, frames=len(sorted_states), interval=200, blit=True)
         
         if save_as.endswith('.gif'):
             ani.save(save_as, writer='pillow')
@@ -329,7 +330,7 @@ def run(
         return None
     else:
         print(
-            f"GPU-{gpu_id}: Starting optimization for N = {N}, u = {u}, c = {c}, k = {k}."
+            f"GPU-{gpu_id}: Starting optimization for N = {N}, u = {u}, c = {c}, k = {k}, pop_size = {pop_size}, max_generations = {max_generations}"
         )
 
         start_time = time.time()
@@ -358,5 +359,5 @@ def run(
         save_metrics(metrics, f"{output_dir}/metrics")
         print(f"GPU-{gpu_id}: Metrics successfully to {output_dir}/metrics.json")
         print(f"GPU-{gpu_id}: Generating animation for Pareto boundary states.")
-        animate_boundary_states(N,u,c,k,f"{output_dir}/metrics.json", save_as=f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}/boundary_states.mp4")
+        animate_boundary_states(N,u,c,k,f"{output_dir}/metrics.json", save_as=f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}/boundary_states.mp4", title=f"Boundary States for N = {N}, u = {u}, c = {c}, k = {k}")
         print(f"GPU-{gpu_id}: Animation saved to {output_dir}/metrics_N{N}_u{u}_c{c}_k{k}.mp4")

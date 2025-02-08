@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torch.multiprocessing as mp
+
 from pymoo.core.problem import Problem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.operators.crossover.sbx import SBX
@@ -9,11 +10,28 @@ from pymoo.operators.sampling.rnd import FloatRandomSampling
 from pymoo.optimize import minimize
 from pymoo.core.callback import Callback
 from pymoo.termination.default import DefaultMultiObjectiveTermination
+
+
 from src.cuda_quantum_ops import GPUQuantumOps
 from src.qutip_quantum_ops import operator_new, p0_projector
 from qutip import expect, displace, squeeze, basis, Qobj
 
+
 class GPUQuantumParetoProblem(Problem):
+    """
+    Multi-objective optimization problem for quantum state optimization using GPU.
+
+    Attributes:
+        N (int): Dimension of the Hilbert space.
+        u (float): Parameter for quantum operations.
+        c (float): Parameter for quantum operations.
+        k (int): Parameter for quantum operations.
+        quantum_ops (GPUQuantumOps): GPU-accelerated quantum operations handler.
+        squeezing_bound (float): Bound used to decide if a candidate is valid.
+        operator: Precomputed operator used in evaluation.
+        projector (torch.Tensor): Projector tensor used for fidelity calculations.
+    """
+
     def __init__(self, N, u, c, k, projector=None):
         self.N = N
         self.u = u
@@ -28,7 +46,7 @@ class GPUQuantumParetoProblem(Problem):
         )
         self.operator = self.quantum_ops.operator_new_gpu(self.u, 0, self.c, self.k)
 
-        if projector == None:
+        if projector is None:
             self.projector = torch.tensor(
                 p0_projector(self.N).full(), dtype=torch.complex64
             ).cuda()
@@ -40,9 +58,7 @@ class GPUQuantumParetoProblem(Problem):
             raise ValueError("Projector must be a QuTiP Qobj")
 
         n_var = 2 * N  # Real and imaginary parts
-
         bound = 10
-        #print("Coefficient bound:", bound)
 
         super().__init__(
             n_var=n_var,
@@ -53,17 +69,29 @@ class GPUQuantumParetoProblem(Problem):
         )
 
     def _check_memory(self):
-        """Check available GPU memory and adjust batch size accordingly."""
+        """
+        Check available GPU memory and adjust batch size accordingly.
+
+        Returns:
+            int: Safe batch size based on available GPU memory.
+        """
         total_memory = torch.cuda.get_device_properties(0).total_memory
         allocated_memory = torch.cuda.memory_allocated()
         free_memory = total_memory - allocated_memory
 
-        element_size = 4 * self.N * 2  # Approx size in bytes for complex64
+        element_size = 4 * self.N * 2  # Approximate size in bytes for complex64 elements
         safe_batch_size = free_memory // element_size
 
-        return max(1, safe_batch_size)  # Ensure at least batch size of 1
+        return max(1, safe_batch_size)  # Ensure at least a batch size of 1
 
     def _evaluate(self, x, out, *args, **kwargs):
+        """
+        Evaluate the objective functions for a given set of candidate solutions.
+
+        Args:
+            x (np.ndarray): Array of candidate solutions.
+            out (dict): Dictionary to store evaluation results with key "F".
+        """
         try:
             x_gpu = torch.tensor(x, dtype=torch.complex64).cuda()
             f = torch.zeros((x_gpu.shape[0], 2), device="cuda")
@@ -80,13 +108,13 @@ class GPUQuantumParetoProblem(Problem):
                             state, self.u, self.c, self.k, self.projector, self.operator
                         )
 
-                        # Add validity checks
+                        # Ensure valid numbers.
                         if torch.isnan(cat_sq) or torch.isinf(cat_sq):
                             cat_sq = torch.tensor(float("inf"), device="cuda")
                         if torch.isnan(out_fid) or torch.isinf(out_fid):
                             out_fid = torch.tensor(1.0, device="cuda")
 
-                        # Skip points with cat_sq > yk by giving them worst possible values
+                        # If candidate exceeds squeezing bound, assign worst values.
                         if np.real(cat_sq.item()) > self.squeezing_bound:
                             f[i + j, 0] = torch.tensor(1e8, device="cuda")
                             f[i + j, 1] = torch.tensor(1.0, device="cuda")
@@ -105,44 +133,38 @@ class GPUQuantumParetoProblem(Problem):
 
     def params_to_state_gpu(self, params):
         """
-        GPU version of params_to_state with improved validation and error handling.
-        Uses a large finite number (1e6) instead of infinity for invalid states.
+        Convert parameter vectors into normalized quantum states on the GPU.
+
+        Uses large finite numbers to replace any infinities or NaNs in the process.
 
         Args:
-            params: Input parameters tensor
+            params (torch.Tensor): Input parameter tensor.
+
         Returns:
-            Normalized quantum states tensor
+            torch.Tensor: Tensor of normalized quantum states.
         """
-        # Define a large but finite number to use instead of inf
         LARGE_NUM = 1e8
         SMALL_NUM = 1e-14
 
         try:
-            # Ensure params is real-valued
+            # Ensure parameters are real-valued if complex.
             params = params.real if torch.is_complex(params) else params
 
-            # Check for NaN or inf in input params
+            # Replace any NaN or inf values.
             if torch.any(torch.isnan(params)) or torch.any(torch.isinf(params)):
-                # Replace NaN/inf with LARGE_NUM (maintaining sign for inf)
                 params = params.clone()
                 inf_mask = torch.isinf(params)
                 nan_mask = torch.isnan(params)
-
-                # Replace inf with signed LARGE_NUM
                 params[inf_mask] = torch.sign(params[inf_mask]) * LARGE_NUM
-                # Replace NaN with small random numbers
                 params[nan_mask] = torch.rand_like(params[nan_mask]) * SMALL_NUM
 
-            # Split into real and imaginary parts
+            # Split into real and imaginary parts.
             real_parts = params[:, : self.N]
             imag_parts = params[:, self.N :]
-
-            # Create complex states using real-valued tensors
             states = torch.complex(real_parts.float(), imag_parts.float())
 
-            # Calculate norms with extra validation
+            # Compute and validate norms.
             abs_squared = torch.abs(states) ** 2
-            # Replace any invalid values in abs_squared
             abs_squared = torch.where(
                 torch.isnan(abs_squared),
                 torch.ones_like(abs_squared) * SMALL_NUM,
@@ -153,10 +175,7 @@ class GPUQuantumParetoProblem(Problem):
                 torch.ones_like(abs_squared) * LARGE_NUM,
                 abs_squared,
             )
-
             norms = torch.sqrt(torch.sum(abs_squared, dim=1, keepdim=True))
-
-            # Handle zero or invalid norms
             norms = torch.where(
                 (norms == 0) | torch.isnan(norms),
                 torch.ones_like(norms) * SMALL_NUM,
@@ -168,16 +187,14 @@ class GPUQuantumParetoProblem(Problem):
                 norms,
             )
 
-            # Normalize states
+            # Normalize states.
             states = states / norms
 
-            # Final validation check
+            # Final check: replace invalid states if needed.
             if torch.any(torch.isnan(states)) or torch.any(torch.isinf(states)):
                 invalid_mask = torch.any(
                     torch.isnan(states) | torch.isinf(states), dim=1, keepdim=True
                 )
-                # Create a valid fallback state that will give a large but finite value
-                # when used in calculations
                 fallback_states = torch.complex(
                     torch.ones_like(states.real) * torch.sqrt(LARGE_NUM / self.N),
                     torch.zeros_like(states.imag),
@@ -188,7 +205,6 @@ class GPUQuantumParetoProblem(Problem):
 
         except Exception as e:
             print(f"Error in params_to_state_gpu: {str(e)}")
-            # Return a fallback state with large magnitude in case of any unexpected errors
             batch_size = params.shape[0]
             fallback = torch.complex(
                 torch.ones((batch_size, self.N), device=params.device)
@@ -199,22 +215,54 @@ class GPUQuantumParetoProblem(Problem):
 
 
 class OptimizationCallback(Callback):
+    """
+    Callback to record optimization progress during NSGA-II.
+    """
+
     def __init__(self) -> None:
         super().__init__()
         self.data["F"] = []
 
     def notify(self, algorithm):
+        """
+        Record current objective function values.
+        
+        Args:
+            algorithm: The current state of the optimization algorithm.
+        """
         self.data["F"].append(algorithm.opt.get("F").copy())
 
-
-
-
 def optimize_quantum_state_gpu_cpu(
-    N, u, c, k, projector=None, initial_kets=None, pop_size=500, max_generations=2000, num_workers=None, verbose=True
+    N,
+    u,
+    c,
+    k,
+    projector=None,
+    initial_kets=None,
+    pop_size=500,
+    max_generations=2000,
+    num_workers=None,
+    verbose=True,
 ):
     """
-    Parallel GPU-CPU hybrid optimization of quantum states
+    Perform a parallel GPU-CPU hybrid optimization of quantum states using NSGA-II.
+    
+    Args:
+        N (int): Dimension of the Hilbert space.
+        u (float): Parameter for quantum operations.
+        c (float): Parameter for quantum operations.
+        k (int): Parameter for quantum operations.
+        projector (Qobj, optional): QuTiP projector. Defaults to None.
+        initial_kets (list, optional): List of initial QuTiP ket states. Defaults to None.
+        pop_size (int, optional): Population size for NSGA-II. Defaults to 500.
+        max_generations (int, optional): Maximum number of generations. Defaults to 2000.
+        num_workers (int, optional): Number of CPU workers. Defaults to None.
+        verbose (bool, optional): If True, print detailed progress. Defaults to True.
+    
+    Returns:
+        The optimization result from pymoo's minimize function.
     """
+    # If no initial kets are provided, generate a set of candidates.
     if initial_kets is None:
         initial_kets = [
             operator_new(N, u, 0, c, k).groundstate()[1],
@@ -229,78 +277,94 @@ def optimize_quantum_state_gpu_cpu(
             for c in range(-1000, 1001)
         ]
         initial_kets.extend(cats)
-
-    # print(f"Initial kets: {initial_kets[0:4]}")
-
-    # Validate and convert initial states
+    
+    # Validate and convert the initial states.
     initial_states = []
     for initial_ket in initial_kets:
         if not isinstance(initial_ket, Qobj) or not initial_ket.isket:
             raise ValueError("All initial_kets must be valid QuTiP ket states")
-
         if initial_ket.dims[0][0] != N:
             raise ValueError(
                 f"Initial ket dimension ({initial_ket.dims[0][0]}) does not match N ({N})"
             )
-
         amplitudes = initial_ket.full().flatten()
         initial_state = np.concatenate([amplitudes.real, amplitudes.imag])
         initial_states.append(initial_state)
-
-    # print(f"Initial states: {initial_states[0:4]}")
-
+    
+    # Instantiate the optimization problem.
     problem = GPUQuantumParetoProblem(N, u, c, k, projector)
-
+    
     class MultiInitialStateSampling(FloatRandomSampling):
+        """
+        Custom sampling that uses provided initial states combined with random sampling.
+        """
+        
         def _do(self, problem, n_samples, **kwargs):
             if n_samples <= len(initial_states):
                 return np.vstack(initial_states[:n_samples])
-            random_samples = super()._do(
-                problem, n_samples - len(initial_states), **kwargs
-            )
+            random_samples = super()._do(problem, n_samples - len(initial_states), **kwargs)
             initial_states_array = np.vstack(initial_states)
             return np.vstack([initial_states_array, random_samples])
-
+    
     if num_workers is None:
         num_workers = mp.cpu_count()
-
+    
+    # Create a multiprocessing pool.
     pool = mp.Pool(processes=num_workers)
-
-    # Create a wrapper for the evaluation function that handles pymoo's requirements
+    
     def parallel_evaluation(X, return_values_of="auto", **kwargs):
+        """
+        Evaluate objective functions in parallel by splitting candidate solutions into chunks.
+        
+        Args:
+            X (np.ndarray): Candidate solutions.
+        
+        Returns:
+            dict: Dictionary with key "F" containing evaluated objective values.
+        """
         out = {"F": np.zeros((X.shape[0], 2))}
         chunk_size = max(1, X.shape[0] // num_workers)
         chunks = [X[i : i + chunk_size] for i in range(0, X.shape[0], chunk_size)]
-
-        # Process chunks in parallel
         results = []
         for chunk in chunks:
             out_chunk = {"F": None}
             problem._evaluate(chunk, out_chunk)
             results.append(out_chunk["F"])
-
-        # Combine results
         out["F"] = np.vstack(results)
         return out
-
-    # Assign the parallel evaluation function to the problem
+    
+    # Overwrite the problem's evaluation method.
     problem.evaluate = parallel_evaluation
-
+    
+    callback = OptimizationCallback()
+    
+    # Instantiate our custom termination object.
+    termination = DefaultMultiObjectiveTermination(
+        xtol=0.0001,
+        cvtol=0.0001,
+        ftol=0.0001,
+        period=100,
+        n_max_gen=max_generations,
+        n_max_evals=max_generations * pop_size,
+    )
+    
+    if verbose:
+        print("\nOptimization Settings:")
+        print(f"Population size: {pop_size}")
+        print(f"Maximum generations: {max_generations}")
+        print(f"Number of workers: {num_workers}")
+        print("\nTermination Criteria:")
+        print(f"xtol: {termination.x.termination.tol}")
+        print(f"cvtol: {termination.cv.termination.tol}")
+        print(f"ftol: {termination.f.termination.tol}")
+        print(f"n_max_gen: {termination.max_gen.n_max_gen}")
+    
     algorithm = NSGA2(
         pop_size=pop_size,
         sampling=MultiInitialStateSampling(),
-        crossover=SBX(prob=0.85, eta=20),
-        mutation=PM(prob=0.20, eta=15),
+        crossover=SBX(prob=0.9, eta=15),
+        mutation=PM(prob=0.25, eta=12),
         eliminate_duplicates=True,
-    )
-
-    callback = OptimizationCallback()
-
-    termination = DefaultMultiObjectiveTermination(
-        n_max_gen=max_generations,  # Maximum number of generations
-        xtol=0.0005,  # Tolerance for design space convergence
-        ftol=0.005,   # Tolerance for objective space convergence
-        period=50     # Check convergence every 50 generations
     )
     
     res = minimize(
@@ -309,11 +373,15 @@ def optimize_quantum_state_gpu_cpu(
     
     pool.close()
     pool.join()
-
+    
     from src.helpers import create_optimization_animation
     create_optimization_animation(
         callback.data["F"],
-        f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}/parreto_front",
+        f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}/pareto_front",
     )
-
+    
     return res
+
+
+if __name__ == "__main__":
+    res = optimize_quantum_state_gpu_cpu(N=20, u=3, c=10, k=100, pop_size=500, max_generations=5000, verbose=True)
