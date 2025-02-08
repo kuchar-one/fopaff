@@ -357,7 +357,7 @@ def optimize_quantum_state_gpu_cpu(
         print(f"xtol: {termination.x.termination.tol}")
         print(f"cvtol: {termination.cv.termination.tol}")
         print(f"ftol: {termination.f.termination.tol}")
-        print(f"n_max_gen: {termination.max_gen.n_max_gen}")
+        print(f"n_max_gen: {termination.max_gen.n_max_gen}\n")
     
     algorithm = NSGA2(
         pop_size=pop_size,
