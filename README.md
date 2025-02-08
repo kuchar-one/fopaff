@@ -46,7 +46,7 @@ You need to have the following software installed:
 
 1. Clone the repository:
    ```sh
-   git clone https://github.com/yourusername/fopaff.git
+   git clone https://github.com/kuchar-one/fopaff.git
    cd fopaff
    ```
 
