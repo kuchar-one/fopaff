@@ -35,6 +35,7 @@ class GPUQuantumOps:
 
         # Print initial CUDA information
         self.monitor.print_cuda_info()
+        print("\n")
         # Pre-compute destruction operator on GPU
         self.d = self._create_destroy_operator().cuda()
         # Pre-compute identity matrix on GPU

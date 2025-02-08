@@ -340,9 +340,9 @@ def optimize_quantum_state_gpu_cpu(
     
     # Instantiate our custom termination object.
     termination = DefaultMultiObjectiveTermination(
-        xtol=0.001,
-        cvtol=0.001,
-        ftol=0.001,
+        xtol=0.0005,
+        cvtol=0.0005,
+        ftol=0.0005,
         period=50,
         n_max_gen=max_generations,
         n_max_evals=max_generations * pop_size,

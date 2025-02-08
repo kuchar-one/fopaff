@@ -29,14 +29,30 @@ def create_optimization_animation(F_history, filename):
     anim.save(filename + ".mp4", writer="ffmpeg")
     plt.close()
 
-    # Save the last frame as a separate vectorized plot
-    fig, ax = plt.subplots(figsize=(8, 6))
+    # Interpolate the final Pareto front with a smoother spline
     F = F_history[-1]
-    ax.scatter(F[:, 0], F[:, 1], c="blue", alpha=0.6)
+    sorted_indices = np.argsort(F[:, 0])
+    sorted_F = F[sorted_indices]
+    f_boundary = interp1d(
+        sorted_F[:, 0],
+        sorted_F[:, 1],
+        kind="cubic",  # Use cubic interpolation for smoother curve
+        bounds_error=False,
+        fill_value="extrapolate",
+    )
+
+    # Create vector and PNG plots of the final Pareto front
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.scatter(F[:, 0], F[:, 1], c="blue", alpha=0.6, s=10, label="Pareto Points")  # Smaller points
+    x_new = np.linspace(np.min(F[:, 0]), np.max(F[:, 0]), 500)
+    y_new = f_boundary(x_new)
+    ax.plot(x_new, y_new, c="red", label="Interpolated Boundary")
     ax.set_xlabel("SQE Squeezing")
     ax.set_ylabel("Output Fidelity")
     ax.set_title("Pareto Front (Final Generation)")
+    ax.legend()
     fig.savefig(filename + "_final_generation.svg")
+    fig.savefig(filename + "_final_generation.png")
     plt.close()
 
 
@@ -234,7 +250,6 @@ def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=Fa
     blend (bool): Whether to include blending between frames.
     title (str): The title of the animation.
     """
-    # Load parameters from the file name
     
     projector = p0_projector(N)
     quantum_ops = GPUQuantumOps(N)
