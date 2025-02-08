@@ -75,4 +75,4 @@ This command will start the optimization process with the specified parameters. 
 
 ## ✍️ Authors <a name = "authors"></a>
 
-- [Vojtěch Kuchař](https://github.com/kuchar-one)
+- [Vojtěch Kuchař](https://kuchar.one)
