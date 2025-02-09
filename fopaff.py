@@ -50,8 +50,10 @@ def main():
 
     # Call run function with parsed arguments
     if len(sys.argv) > 1:
-
-        out_dir = f"output/{args.max_generations}_maxgens_{args.pop_size}_individuals_N{args.N}_u{args.u}_c{args.c}_k{args.k}"
+        if args.parity == "even":
+            out_dir = f"output/{args.max_generations}_maxgens_{args.pop_size}_individuals_N{args.N}_u{args.u}_c{args.c}_k{args.k}"
+        else:
+            out_dir = f"output/{args.max_generations}_maxgens_{args.pop_size}_individuals_N{args.N}_u{args.u}_c{args.c}_k{args.k}_odd"
         if not os.path.exists(out_dir):
             os.makedirs(out_dir)
 

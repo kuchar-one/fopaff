@@ -38,6 +38,7 @@ class GPUQuantumParetoProblem(Problem):
         self.c = c
         self.k = k
         self.quantum_ops = GPUQuantumOps(N)
+        self.parity = parity
         self.squeezing_bound = np.real(
             expect(
                 operator_new(self.N, self.u, 0.0, self.c, self.k),
@@ -110,7 +111,7 @@ class GPUQuantumParetoProblem(Problem):
                 for j, state in enumerate(states):
                     try:
                         cat_sq, out_fid = self.quantum_ops.catfid_gpu(
-                            state, self.u, self.c, self.k, self.projector, self.operator
+                            state, self.u, self.parity, self.c, self.k, self.projector, self.operator
                         )
 
                         # Ensure valid numbers.
@@ -299,7 +300,7 @@ def optimize_quantum_state_gpu_cpu(
         initial_states.append(initial_state)
     
     # Instantiate the optimization problem.
-    problem = GPUQuantumParetoProblem(N, u, c, k, projector)
+    problem = GPUQuantumParetoProblem(N, u, c, k, parity, projector)
     
     class MultiInitialStateSampling(FloatRandomSampling):
         """
@@ -381,10 +382,14 @@ def optimize_quantum_state_gpu_cpu(
     pool.close()
     pool.join()
     
+    if parity == "even":
+        out_dir = f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}"
+    elif parity == "odd":
+        out_dir = f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}_odd"
     from src.helpers import create_optimization_animation
     create_optimization_animation(
         callback.data["F"],
-        f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}/pareto_front",
+        f"{out_dir}/pareto_front",
     )
     
     return res

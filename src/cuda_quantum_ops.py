@@ -426,7 +426,7 @@ class GPUQuantumOps:
 
         print("Verification successful!")
 
-    def catfid_gpu(self, state, u, c, k, projector, operator=None):
+    def catfid_gpu(self, state, u, parity, c, k, projector, operator=None):
         """GPU-accelerated version of catfid"""
         # Convert operator_new to GPU tensor
         if operator == None:
@@ -443,7 +443,10 @@ class GPUQuantumOps:
         squeezed = torch.mv(self.squeeze(np.log(2) / 2), vacuum)
         displaced_plus = torch.mv(self.displace(u / 2), squeezed)
         displaced_minus = torch.mv(self.displace(-u / 2), squeezed)
-        ideal_state = displaced_plus + displaced_minus
+        if parity == "even":
+            ideal_state = displaced_plus + displaced_minus
+        elif parity == "odd":
+            ideal_state = displaced_plus - displaced_minus
         ideal_state = ideal_state / torch.sqrt(torch.vdot(ideal_state, ideal_state))
 
         # Calculate output state
