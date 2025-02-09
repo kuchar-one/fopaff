@@ -44,6 +44,7 @@ def main():
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("--tolerance", type=float, default=5e-4, help="Tolerance for convergence (default: 1e-6)")
+    parser.add_argument("--parity", type=str, default="even", help="Parity of the state (default: even)")
     # Parse arguments
     args = parser.parse_args()
 
@@ -64,6 +65,7 @@ def main():
             max_generations=args.max_generations,
             verbose=args.verbose,
             tolerance=args.tolerance,
+            parity=args.parity,
         )
 
 

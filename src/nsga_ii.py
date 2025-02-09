@@ -32,7 +32,7 @@ class GPUQuantumParetoProblem(Problem):
         projector (torch.Tensor): Projector tensor used for fidelity calculations.
     """
 
-    def __init__(self, N, u, c, k, projector=None):
+    def __init__(self, N, u, c, k, parity, projector=None):
         self.N = N
         self.u = u
         self.c = c
@@ -44,7 +44,12 @@ class GPUQuantumParetoProblem(Problem):
                 operator_new(self.N, self.u, np.pi, self.c, self.k).groundstate()[1],
             )
         )
-        self.operator = self.quantum_ops.operator_new_gpu(self.u, 0, self.c, self.k)
+        if parity == "even":
+            self.operator = self.quantum_ops.operator_new_gpu(self.u, 0, self.c, self.k)
+        if parity == "odd":
+            self.operator = self.quantum_ops.operator_new_gpu(self.u, np.pi, self.c, self.k)
+        else:
+            raise ValueError("Parity must be either 'even' or 'odd'")
 
         if projector is None:
             self.projector = torch.tensor(
@@ -244,6 +249,7 @@ def optimize_quantum_state_gpu_cpu(
     num_workers=None,
     verbose=True,
     tolerance=5e-4,
+    parity="even",
 ):
     """
     Perform a parallel GPU-CPU hybrid optimization of quantum states using NSGA-II.
