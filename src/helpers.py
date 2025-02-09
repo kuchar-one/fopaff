@@ -337,10 +337,10 @@ def animate_boundary_states(N, u, c, k, file_name, save_as='animation.mp4', blen
             return np.interp(value, x_points, y_points, left=-np.inf, right=np.inf)
         
         
-    norm = PlateauTwoSlopeNorm(vcenter=0, plateau_size=0.05, vmin=-0.23, vmax=0.23)
+    norm = PlateauTwoSlopeNorm(vcenter=0, plateau_size=0.03, vmin=-0.23, vmax=0.23)
     
     # Create a dummy contour plot just for the colorbar
-    dummy_data = np.zeros((len(xvec), len(yvec)))
+    dummy_data = wigner(measure_mode(N, beam_splitter(N, sorted_states[0], basis(N, 0)), projector, 1), xvec, yvec)
     dummy_cont = ax1.contourf(xvec, yvec, dummy_data, 30, cmap=cmap, norm=norm)
     plt.colorbar(dummy_cont, cax=cax, orientation='vertical')
     ax1.clear()  # Clear the dummy plot
