@@ -239,7 +239,7 @@ def verify_metrics(original_metrics, loaded_metrics, test_points=None):
         loaded_val = loaded_metrics["boundary_function"](x)
         print(f"At x = {x:.4f}: original = {orig_val:.6f}, loaded = {loaded_val:.6f}")
 
-def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=False, title='Quantum State Animation'):
+def animate_boundary_states(N, u, c, k, file_name, save_as='animation.mp4', blend=False, title='Quantum State Animation'):
     """
     Create an animation of all the quantum states in the metrics['X'] Pareto boundary with a progress bar.
     The states are sorted in ascending order based on the expectation value of the operator_new operator.
@@ -269,53 +269,113 @@ def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=Fa
     # Apply the same permutation to the states list
     sorted_states = [states[i] for i in sort_indices]
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    fig, (ax1, ax2, cax) = plt.subplots(1, 3, figsize=(14, 6), gridspec_kw={"width_ratios": [1, 1, 0.05]})
     plt.suptitle(title)
     
     xvec = np.linspace(-8, 8, 100)
     yvec = np.linspace(-8, 8, 100)
     
     cmap = plt.colormaps.get_cmap('inferno')
-    norm = colors.TwoSlopeNorm(vmin=-0.23, vcenter=0, vmax=0.23)
+    
+    class PlateauTwoSlopeNorm(colors.TwoSlopeNorm):
+        def __init__(self, vcenter, plateau_size, vmin=None, vmax=None):
+            """
+            A modified TwoSlopeNorm that maintains a constant color within 
+            a specified range around vcenter before transitioning to the endpoints.
+            
+            Parameters
+            ----------
+            vcenter : float
+                The central value that defines the plateau midpoint
+            plateau_size : float
+                The total width of the plateau region (vcenter ± plateau_size/2)
+            vmin : float, optional
+                The minimum value in the normalization
+            vmax : float, optional
+                The maximum value in the normalization
+            """
+            super().__init__(vcenter=vcenter, vmin=vmin, vmax=vmax)
+            self.plateau_size = plateau_size
+            
+        def __call__(self, value, clip=None):
+            """
+            Map values to the interval [0, 1], maintaining a constant value
+            within the plateau region.
+            """
+            result, is_scalar = self.process_value(value)
+            self.autoscale_None(result)
+            
+            if not self.vmin <= self.vcenter <= self.vmax:
+                raise ValueError("vmin, vcenter, vmax must increase monotonically")
+                
+            # Define plateau boundaries
+            plateau_lower = self.vcenter - self.plateau_size/2
+            plateau_upper = self.vcenter + self.plateau_size/2
+            
+            # Create interpolation points including plateau region
+            x_points = [self.vmin, plateau_lower, plateau_upper, self.vmax]
+            y_points = [0, 0.5, 0.5, 1]
+            
+            result = np.ma.masked_array(
+                np.interp(result, x_points, y_points, left=-np.inf, right=np.inf),
+                mask=np.ma.getmask(result))
+                
+            if is_scalar:
+                result = np.atleast_1d(result)[0]
+            return result
+            
+        def inverse(self, value):
+            if not self.scaled():
+                raise ValueError("Not invertible until both vmin and vmax are set")
+                
+            plateau_lower = self.vcenter - self.plateau_size/2
+            plateau_upper = self.vcenter + self.plateau_size/2
+            
+            x_points = [0, 0.5, 0.5, 1]
+            y_points = [self.vmin, plateau_lower, plateau_upper, self.vmax]
+            
+            return np.interp(value, x_points, y_points, left=-np.inf, right=np.inf)
+        
+        
+    norm = PlateauTwoSlopeNorm(vcenter=0, plateau_size=0.05, vmin=-0.23, vmax=0.23)
+    
+    # Create a dummy contour plot just for the colorbar
+    dummy_data = np.zeros((len(xvec), len(yvec)))
+    dummy_cont = ax1.contourf(xvec, yvec, dummy_data, 30, cmap=cmap, norm=norm)
+    plt.colorbar(dummy_cont, cax=cax, orientation='vertical')
+    ax1.clear()  # Clear the dummy plot
     
     def update(frame):
-        # Clear previous plots
         ax1.clear()
         ax2.clear()
-        # Get current state and fidelities
+        
         state = sorted_states[frame]
         cf = sorted_catfids[frame]
         
-        # Calculate Wigner functions
         W = wigner(state, xvec, yvec)
+        W_breeding = wigner(measure_mode(N, beam_splitter(N, state, basis(N, 0)), projector, 1), xvec, yvec)
         
-        # Breeding state Wigner function
-        W_breeding = wigner(measure_mode(N, beam_splitter(N, state, basis(N,0)), projector, 1), xvec, yvec)
-        
-        # Optional blending
         if blend and frame > 0:
             prev_state = sorted_states[frame - 1]
             prev_W = wigner(prev_state, xvec, yvec)
             W = 0.5 * W + 0.5 * prev_W
         
-        # Plot first Wigner function (current state)
+        # Use same normalization for both plots
         cont1 = ax1.contourf(xvec, yvec, W, 30, cmap=cmap, norm=norm)
-        ax1.set_title(f"Input Wigner Function\n<O> = {cf[0]:.4f}, a = {u:0.0e}, c = {c:0.0e}")
+        ax1.set_title(f"Input Wigner Function\n<O> = {cf[0]:.4f}")
         ax1.grid(False)
         
-        # Plot second Wigner function (breeding state)
         cont2 = ax2.contourf(xvec, yvec, W_breeding, 100, cmap=cmap, norm=norm)
         ax2.set_title(f"Output Wigner Function\nF = {cf[1]:.4f}")
         ax2.grid(False)
         
-        return (cont1, cont2)
+        return (cont1.collections + cont2.collections)
     
-    # Use tqdm to display a progress bar
     with tqdm(total=len(sorted_states), desc="Generating boundary state animation") as pbar:
         def update_with_progress(frame):
-            update(frame)
+            result = update(frame)
             pbar.update(1)
-            return []
+            return result
         
         ani = FuncAnimation(fig, update_with_progress, frames=len(sorted_states), interval=200, blit=True)
         
