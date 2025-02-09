@@ -47,10 +47,10 @@ class GPUQuantumParetoProblem(Problem):
         )
         if parity == "even":
             self.operator = self.quantum_ops.operator_new_gpu(self.u, 0, self.c, self.k)
-        if parity == "odd":
+        elif parity == "odd":
             self.operator = self.quantum_ops.operator_new_gpu(self.u, np.pi, self.c, self.k)
         else:
-            raise ValueError("Parity must be either 'even' or 'odd'")
+            raise ValueError(f"Parity must be either 'even' or 'odd', not '{parity}'")
 
         if projector is None:
             self.projector = torch.tensor(
