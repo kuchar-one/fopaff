@@ -243,6 +243,7 @@ def optimize_quantum_state_gpu_cpu(
     max_generations=2000,
     num_workers=None,
     verbose=True,
+    tolerance=5e-4,
 ):
     """
     Perform a parallel GPU-CPU hybrid optimization of quantum states using NSGA-II.
@@ -340,9 +341,9 @@ def optimize_quantum_state_gpu_cpu(
     
     # Instantiate our custom termination object.
     termination = DefaultMultiObjectiveTermination(
-        xtol=0.0005,
-        cvtol=0.0005,
-        ftol=0.0005,
+        xtol=tolerance,
+        cvtol=tolerance,
+        ftol=tolerance,
         period=50,
         n_max_gen=max_generations,
         n_max_evals=max_generations * pop_size,

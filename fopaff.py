@@ -43,7 +43,7 @@ def main():
         help="Maximum number of generations (default: 2000)",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-
+    parser.add_argument("--tolerance", type=float, default=5e-4, help="Tolerance for convergence (default: 1e-6)")
     # Parse arguments
     args = parser.parse_args()
 
@@ -63,6 +63,7 @@ def main():
             pop_size=args.pop_size,
             max_generations=args.max_generations,
             verbose=args.verbose,
+            tolerance=args.tolerance,
         )
 
 

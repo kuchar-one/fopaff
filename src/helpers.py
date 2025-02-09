@@ -330,7 +330,7 @@ def animate_boundary_states(N,u,c,k,file_name, save_as='animation.mp4', blend=Fa
 
 
 def run(
-    gpu_id=0, N=30, u=3, c=10, k=100, pop_size=500, max_generations=2000, verbose=True
+    gpu_id=0, N=30, u=3, c=10, k=100, pop_size=500, max_generations=2000, verbose=True, tolerance=5e-4
 ):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     output_dir = f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}"
@@ -359,6 +359,7 @@ def run(
             pop_size=pop_size,
             max_generations=max_generations,
             verbose=verbose,
+            tolerance=tolerance,
         )
 
         end_time = time.time()
