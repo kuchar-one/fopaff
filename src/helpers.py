@@ -369,7 +369,7 @@ def animate_boundary_states(N, u, c, k, file_name, save_as='animation.mp4', blen
         ax2.set_title(f"Output Wigner Function\nF = {cf[1]:.4f}")
         ax2.grid(False)
         
-        return (cont1.collections + cont2.collections)
+        return (cont1, cont2)
     
     with tqdm(total=len(sorted_states), desc="Generating boundary state animation") as pbar:
         def update_with_progress(frame):
