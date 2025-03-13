@@ -16,7 +16,7 @@ from src.qutip_quantum_ops import (
     p0_projector,
     catgkp,
 )
-from src.logging import setup_logger
+from src.logger import setup_logger
 
 logger = setup_logger()
 

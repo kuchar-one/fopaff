@@ -3,7 +3,6 @@ from matplotlib.animation import FuncAnimation
 import matplotlib.pyplot as plt
 import numpy as np
 import json
-import os
 import time
 from qutip import wigner, basis
 from src.qutip_quantum_ops import p0_projector, measure_mode, beam_splitter
@@ -11,7 +10,7 @@ from src.cuda_quantum_ops import GPUQuantumOps
 from matplotlib import colors
 from tqdm import tqdm
 from src.nsga_ii import optimize_quantum_state_gpu_cpu
-from src.logging import setup_logger
+from src.logger import setup_logger
 
 # Set up logger
 logger = setup_logger()
@@ -452,7 +451,6 @@ def run(
         None or optimization result
     """
     import os
-    import time
     import torch
     
     logger.info(f"Starting quantum state optimization run with parameters: N={N}, u={u}, c={c}, k={k}")
@@ -470,10 +468,10 @@ def run(
         raise ValueError(f"GPU device {gpu_id} not found. Available devices: 0-{device_count-1}")
     
     # Set CUDA device - both environment variable and PyTorch setting
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    #os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     torch.cuda.set_device(gpu_id)
     
-    logger.info(f"Using GPU device {gpu_id}: {torch.cuda.get_device_name(gpu_id)}")
+    #logger.info(f"Using GPU device {gpu_id}: {torch.cuda.get_device_name(gpu_id)}")
     
     # Prepare output directory
     if parity == "even":
