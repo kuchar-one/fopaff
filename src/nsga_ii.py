@@ -245,7 +245,7 @@ class OptimizationCallback(Callback):
 
 def optimize_quantum_state_gpu_cpu(
     N, u, c, k, projector=None, initial_kets=None, pop_size=500,
-    max_generations=2000, num_workers=None, verbose=True, tolerance=5e-4,
+    max_generations=2000, num_workers=12, verbose=True, tolerance=5e-4,
     parity="even", device_id=0,
 ):
     """

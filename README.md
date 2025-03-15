@@ -14,7 +14,7 @@
 
 ---
 
-<p align="center"> A tool for optimizing quantum states using multi-objective optimization techniques.
+<p align="center"> A tool for founding bounds between different quantum state metrics using multi-objective optimization techniques.
     <br> 
 </p>
 
@@ -23,6 +23,7 @@
 - [About](#about)
 - [Getting Started](#getting_started)
 - [Usage](#usage)
+- [Possible Issues](#issues)
 - [Built Using](#built_using)
 - [Authors](#authors)
 
@@ -63,7 +64,11 @@ To run the optimization, use the following command:
 python fopaff.py --gpu_id 0 -N 30 -u 3 -c 10 -k 100 --pop_size 500 --max_generations 2000 --verbose
 ```
 
-This command will start the optimization process with the specified parameters. The results, including metrics and animations, will be saved in the `output` directory.
+This command will start the optimization process with the specified parameters. The results, including metrics and animations, will be saved in the `output` directory. Matrices utilized within the optimization can be found in the `cache` directory.
+
+## Possible Issues <a name = "issues"></a>
+
+On lower-end GPUs, the available VRAM might be insufficient for initializing many parallel workers, in that case, either lower the `num_workers` variable in `src.nsga_ii.optimize_quantum_state_gpu_cpu` or replace `src.nsga_ii` with `src.nsga_ii.lowend`.
 
 ## ⛏️ Built Using <a name = "built_using"></a>
 

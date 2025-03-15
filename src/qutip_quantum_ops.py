@@ -1,7 +1,8 @@
-import qutip as qt
-import matplotlib.pyplot as plt
-import numpy as np
 import os
+os.environ['OMP_NUM_THREADS'] = '6'
+import matplotlib.pyplot as plt
+import qutip as qt
+import numpy as np
 from mpmath import sqrt, pi, jtheta, exp, fac
 from scipy.optimize import minimize_scalar
 from scipy.special import hermite, factorial, gamma

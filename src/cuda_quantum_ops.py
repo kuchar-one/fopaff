@@ -1,5 +1,6 @@
 import sys
 import os
+os.environ['OMP_NUM_THREADS'] = '6'
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from src.cuda_helpers import DeviceMonitor
