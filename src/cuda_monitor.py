@@ -1,39 +1,106 @@
 import torch
 import time
 from functools import wraps
+from typing import Union, Callable, Any
 
 
 class DeviceMonitor:
-    """A utility class for monitoring tensor device locations and operations in PyTorch."""
+    """
+    A utility class for monitoring and debugging PyTorch tensor device operations.
+
+    This class provides static methods for tracking tensor device locations,
+    monitoring CUDA device usage, and profiling tensor operations. It is particularly
+    useful for debugging device-related issues and performance monitoring in
+    GPU-accelerated applications.
+
+    The class offers functionality to:
+    - Track tensor device locations
+    - Monitor CUDA device memory usage
+    - Profile function execution times
+    - Debug device-related issues
+
+    Example:
+        >>> monitor = DeviceMonitor()
+        >>> tensor = torch.randn(10, device='cuda:0')
+        >>> print(monitor.get_tensor_device(tensor))
+        'cuda:0'
+        >>> monitor.print_cuda_info()
+        CUDA Device Information:
+          Current device: 0
+          Device name: NVIDIA A100
+          ...
+    """
 
     @staticmethod
-    def get_tensor_device(tensor):
-        """Returns the device of a given tensor in a human-readable format.
+    def get_tensor_device(tensor: Any) -> str:
+        """
+        Get the device of a tensor in a human-readable format.
+
+        This method safely determines the device location of a PyTorch tensor,
+        handling non-tensor inputs gracefully.
 
         Args:
-            tensor (torch.Tensor): The tensor whose device is to be identified.
+            tensor (Any): The tensor whose device is to be identified. Can be
+                any type, but only torch.Tensor will return a device location.
 
         Returns:
-            str: The device of the tensor, or "not a tensor" if the input is not a tensor.
+            str: The device of the tensor (e.g., 'cuda:0', 'cpu'), or
+                'not a tensor' if the input is not a torch.Tensor.
+
+        Example:
+            >>> tensor = torch.randn(10, device='cuda:0')
+            >>> DeviceMonitor.get_tensor_device(tensor)
+            'cuda:0'
+            >>> DeviceMonitor.get_tensor_device([1, 2, 3])
+            'not a tensor'
         """
         if not isinstance(tensor, torch.Tensor):
             return "not a tensor"
         return str(tensor.device)
 
     @staticmethod
-    def get_current_device():
-        """Returns the current CUDA device if available, otherwise returns 'cpu'.
+    def get_current_device() -> str:
+        """
+        Get the current active CUDA device if available.
+
+        This method determines the currently active CUDA device in the PyTorch
+        context, falling back to CPU if CUDA is not available.
 
         Returns:
-            str: The current CUDA device in the format 'cuda:<device_id>' or 'cpu' if CUDA is not available.
+            str: The current CUDA device in the format 'cuda:<device_id>' or
+                'cpu' if CUDA is not available.
+
+        Example:
+            >>> DeviceMonitor.get_current_device()
+            'cuda:0'  # If CUDA is available
+            >>> DeviceMonitor.get_current_device()
+            'cpu'     # If CUDA is not available
         """
         if torch.cuda.is_available():
             return f"cuda:{torch.cuda.current_device()}"
         return "cpu"
 
     @staticmethod
-    def print_cuda_info():
-        """Prints detailed information about the current CUDA device if available, otherwise indicates that no CUDA device is available."""
+    def print_cuda_info() -> None:
+        """
+        Print detailed information about the current CUDA device and its memory usage.
+
+        This method provides comprehensive information about the CUDA device,
+        including device name, total memory, allocated memory, and cached memory.
+        It's useful for debugging memory issues and monitoring resource usage.
+
+        The information printed includes:
+        - Current device ID
+        - Device name
+        - Total memory (MB)
+        - Currently allocated memory (MB)
+        - Cached memory (MB)
+
+        Note:
+            - Memory values are reported in megabytes (MB)
+            - If CUDA is not available, indicates CPU-only operation
+            - Memory statistics are point-in-time snapshots
+        """
         if torch.cuda.is_available():
             current_device = torch.cuda.current_device()
             device_props = torch.cuda.get_device_properties(current_device)
@@ -49,16 +116,43 @@ class DeviceMonitor:
             print("\nNo CUDA device available. Running on CPU.")
 
     @staticmethod
-    def device_trace(func):
-        """A decorator to trace tensor device locations in functions and measure execution time.
+    def device_trace(func: Callable) -> Callable:
+        """
+        Decorator for tracing tensor device locations and execution time in functions.
+
+        This decorator provides detailed information about tensor device locations
+        before and after function execution, as well as execution timing. It's
+        particularly useful for debugging device-related issues and performance
+        monitoring.
 
         Args:
-            func (callable): The function to be decorated.
+            func (Callable): The function to be decorated.
 
         Returns:
-            callable: The wrapped function with added device tracing and timing.
-        """
+            Callable: The wrapped function with added device tracing and timing
+                capabilities.
 
+        The decorator tracks:
+        - Current active device
+        - Device location of all tensor arguments
+        - Device location of tensor keyword arguments
+        - Device location of tensor results
+        - Function execution time
+
+        Example:
+            >>> @DeviceMonitor.device_trace
+            ... def add_tensors(a, b):
+            ...     return a + b
+            >>> x = torch.randn(10, device='cuda:0')
+            >>> y = torch.randn(10, device='cuda:0')
+            >>> result = add_tensors(x, y)
+            Tracing device locations in add_tensors:
+              Current device: cuda:0
+              Arg 0 device: cuda:0
+              Arg 1 device: cuda:0
+              Result device: cuda:0
+              Execution time: 0.0001 seconds
+        """
         @wraps(func)
         def wrapper(*args, **kwargs):
             print(f"\nTracing device locations in {func.__name__}:")

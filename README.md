@@ -14,7 +14,7 @@
 
 ---
 
-<p align="center"> A tool for founding bounds between different quantum state metrics using multi-objective optimization techniques.
+<p align="center"> A tool for finding bounds between different quantum state metrics using multi-objective optimization techniques.
     <br> 
 </p>
 
@@ -29,7 +29,7 @@
 
 ## 🧐 About <a name = "about"></a>
 
-FoPaFF (Fock Pareto Front Finder) is a tool designed find the lower virtual interaction fidelity bound based on the expectation value of a specific operator in a truncated Fock space. It leverages GPU acceleration to perform quantum operations and uses the NSGA-II algorithm to find Pareto optimal solutions.
+FoPaFF (Fock Pareto Front Finder) is a tool designed to find the lower virtual interaction fidelity bound based on the expectation value of a specific operator in a truncated Fock space. It leverages GPU acceleration to perform quantum operations and uses the NSGA-II algorithm to find Pareto optimal solutions.
 
 ## 🏁 Getting Started <a name = "getting_started"></a>
 
@@ -68,7 +68,7 @@ This command will start the optimization process with the specified parameters. 
 
 ## Possible Issues <a name = "issues"></a>
 
-On lower-end GPUs, the available VRAM might be insufficient for initializing many parallel workers, in that case, either lower the `num_workers` variable in `src.nsga_ii.optimize_quantum_state_gpu_cpu` or replace `src.nsga_ii` with `src.nsga_ii.lowend`.
+On lower-end GPUs, the available VRAM might be insufficient for initializing many parallel workers. In that case, either lower the `num_workers` variable in `src.nsga_ii.optimize_quantum_state_gpu_cpu` or replace `src.nsga_ii` with `src.nsga_ii.lowend`.
 
 ## ⛏️ Built Using <a name = "built_using"></a>
 

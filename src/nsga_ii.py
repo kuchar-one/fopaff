@@ -14,19 +14,24 @@ from pymoo.core.problem import StarmapParallelization
 from multiprocessing import get_context
 
 from src.cuda_quantum_ops import GPUQuantumOps
-from src.cuda_helpers import GPUDeviceWrapper  # using GPUDeviceWrapper as provided
+from src.cuda_helpers import GPUDeviceWrapper
 from src.qutip_quantum_ops import operator_new, p0_projector
 from src.logger import setup_logger
 from qutip import expect, displace, squeeze, basis, Qobj
 
-# --- Top-level definitions for multiprocessing ---
-
-# Global variable for worker processes.
+# Global variable for worker processes
 GLOBAL_PROBLEM = None
 
 def set_gpu_device_silent(device_id):
     """
     Set the GPU device without printing any messages.
+    
+    Args:
+        device_id (int): The ID of the GPU device to use.
+        
+    Raises:
+        ValueError: If the specified device_id is not available.
+        RuntimeError: If no CUDA-capable GPU devices are found.
     """
     if torch.cuda.is_available():
         if device_id >= torch.cuda.device_count():
@@ -39,9 +44,16 @@ def set_gpu_device_silent(device_id):
 
 def init_worker(N, u, c, k, parity, projector, device_id):
     """
-    Pool initializer function. In each worker process, set the GPU device
-    and create a GPUQuantumParetoProblem instance (without parallelization)
-    which is stored in the global variable.
+    Pool initializer function for multiprocessing workers.
+    
+    Args:
+        N (int): Dimension of the Fock space.
+        u (float): Parameter for quantum operations.
+        c (float): Parameter for quantum operations.
+        k (int): Parameter for quantum operations.
+        parity (str): Parity of the quantum state ('even' or 'odd').
+        projector (Qobj): QuTiP projector object.
+        device_id (int): GPU device ID to use.
     """
     global GLOBAL_PROBLEM
     set_gpu_device_silent(device_id)
@@ -52,7 +64,13 @@ def init_worker(N, u, c, k, parity, projector, device_id):
 def evaluate_chunk(chunk):
     """
     Top-level function to evaluate a chunk of candidate solutions.
-    Uses the global GPUQuantumParetoProblem instance (set by init_worker).
+    Uses the global GPUQuantumParetoProblem instance.
+    
+    Args:
+        chunk (numpy.ndarray): Array of candidate solutions to evaluate.
+        
+    Returns:
+        numpy.ndarray: Array of objective function values for each candidate.
     """
     global GLOBAL_PROBLEM
     set_gpu_device_silent(GLOBAL_PROBLEM.device_id)
@@ -60,19 +78,45 @@ def evaluate_chunk(chunk):
     GLOBAL_PROBLEM._evaluate(chunk, out_chunk)
     return out_chunk["F"]
 
-# --- End top-level definitions ---
-
-
-# Set up the logger
 logger = setup_logger()
-
 
 class GPUQuantumParetoProblem(Problem):
     """
     Multi-objective optimization problem for quantum state optimization using GPU.
+    This class implements a parallel version of the quantum state optimization
+    problem using GPU acceleration.
+
+    Attributes:
+        N (int): Dimension of the Fock space.
+        u (float): Parameter for quantum operations.
+        c (float): Parameter for quantum operations.
+        k (int): Parameter for quantum operations.
+        device_id (int): GPU device ID to use.
+        device (str): CUDA device string.
+        quantum_ops (GPUDeviceWrapper): GPU-accelerated quantum operations handler.
+        parity (str): Parity of the quantum state ('even' or 'odd').
+        squeezing_bound (float): Bound used to decide if a candidate is valid.
+        operator (torch.Tensor): Precomputed operator used in evaluation.
+        projector (torch.Tensor): Projector tensor used for fidelity calculations.
     """
 
     def __init__(self, N, u, c, k, parity, projector=None, device_id=0, parallelization=None):
+        """
+        Initialize the GPU quantum pareto optimization problem.
+        
+        Args:
+            N (int): Dimension of the Fock space.
+            u (float): Parameter for quantum operations.
+            c (float): Parameter for quantum operations.
+            k (int): Parameter for quantum operations.
+            parity (str): Parity of the quantum state ('even' or 'odd').
+            projector (Qobj, optional): QuTiP projector object. Defaults to None.
+            device_id (int, optional): GPU device ID to use. Defaults to 0.
+            parallelization (StarmapParallelization, optional): Parallelization strategy. Defaults to None.
+            
+        Raises:
+            ValueError: If parity is not 'even' or 'odd', or if projector is invalid.
+        """
         set_gpu_device_silent(device_id)
         self.N = N
         self.u = u
@@ -119,6 +163,16 @@ class GPUQuantumParetoProblem(Problem):
         super().__init__(n_var=n_var, n_obj=2, n_constr=0, xl=-bound, xu=bound, parallelization=parallelization)
 
     def _check_memory(self):
+        """
+        Check available GPU memory and calculate a safe batch size for processing.
+        
+        Returns:
+            int: Safe batch size based on available GPU memory.
+            
+        Note:
+            The batch size is calculated based on the size of complex64 elements
+            and ensures at least one sample can be processed.
+        """
         total_memory = torch.cuda.get_device_properties(self.device_id).total_memory
         allocated_memory = torch.cuda.memory_allocated(self.device_id)
         free_memory = total_memory - allocated_memory
@@ -133,6 +187,23 @@ class GPUQuantumParetoProblem(Problem):
         return max(1, safe_batch_size)
 
     def _evaluate(self, x, out, *args, **kwargs):
+        """
+        Evaluate the objective functions for a batch of candidate solutions.
+        
+        Args:
+            x (numpy.ndarray): Array of candidate solutions to evaluate.
+            out (dict): Dictionary to store evaluation results with key "F".
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+            
+        Note:
+            The evaluation computes two objectives:
+            1. Squeezing value (to be minimized)
+            2. Output fidelity (to be minimized)
+            
+            If a candidate exceeds the squeezing bound or produces invalid results,
+            it is assigned worst-case values (1e8 for squeezing, 1.0 for fidelity).
+        """
         try:
             x_gpu = torch.tensor(x, dtype=torch.complex64).to(self.device)
             f = torch.zeros((x_gpu.shape[0], 2), device=self.device)
@@ -173,6 +244,20 @@ class GPUQuantumParetoProblem(Problem):
             out["F"] = np.full((x.shape[0], 2), np.inf)
 
     def params_to_state_gpu(self, params):
+        """
+        Convert optimization parameters to normalized quantum states on GPU.
+        
+        Args:
+            params (torch.Tensor): Input parameters tensor containing real and imaginary parts.
+            
+        Returns:
+            torch.Tensor: Normalized quantum states tensor.
+            
+        Note:
+            The function handles invalid values (NaN, Inf) by replacing them with
+            finite values (LARGE_NUM=1e8 for Inf, SMALL_NUM=1e-14 for NaN).
+            The states are normalized to ensure they represent valid quantum states.
+        """
         LARGE_NUM = 1e8
         SMALL_NUM = 1e-14
         try:
@@ -203,7 +288,7 @@ class GPUQuantumParetoProblem(Problem):
                 invalid_count = torch.sum(invalid_mask).item()
                 logger.warning(f"Found {invalid_count} invalid states after normalization, using fallback states")
                 fallback_states = torch.complex(torch.ones_like(states.real) * torch.sqrt(LARGE_NUM / self.N),
-                                                torch.zeros_like(states.imag))
+                                             torch.zeros_like(states.imag))
                 states = torch.where(invalid_mask, fallback_states, states)
             return states
         except Exception as e:
@@ -218,15 +303,31 @@ class GPUQuantumParetoProblem(Problem):
 
 class OptimizationCallback(Callback):
     """
-    Callback to record optimization progress during NSGA-II.
+    Callback to record and log optimization progress during NSGA-II execution.
+    
+    Attributes:
+        data (dict): Dictionary storing optimization history with key "F" for objective values.
+        logger (Logger): Logger instance for recording progress.
     """
+
     def __init__(self) -> None:
+        """Initialize the callback with empty data storage."""
         super().__init__()
         self.data["F"] = []
         self.logger = setup_logger()
         self.logger.info("Optimization callback initialized")
 
     def notify(self, algorithm):
+        """
+        Record optimization progress at each generation.
+        
+        Args:
+            algorithm: The NSGA-II algorithm instance.
+            
+        Note:
+            Logs the minimum values of both objective functions and population size
+            at each generation.
+        """
         generation = algorithm.n_gen
         if hasattr(algorithm, "opt") and algorithm.opt is not None:
             opt_F = algorithm.opt.get("F")
@@ -235,7 +336,8 @@ class OptimizationCallback(Callback):
                 min_f1 = opt_F[:, 0].min() if len(opt_F) > 0 else float("inf")
                 min_f2 = opt_F[:, 1].min() if len(opt_F) > 0 else float("inf")
                 self.logger.info(
-                    f"Generation {generation}: Min SQE={min_f1:.6f}, Min Fidelity={min_f2:.6f}, Population size={len(opt_F)}"
+                    f"Generation {generation}: Min SQE={min_f1:.6f}, Min Fidelity={min_f2:.6f}, "
+                    f"Population size={len(opt_F)}"
                 )
             else:
                 self.logger.warning(f"Generation {generation}: No optimal solutions found yet")
@@ -250,6 +352,34 @@ def optimize_quantum_state_gpu_cpu(
 ):
     """
     Perform a parallel GPU-CPU hybrid optimization of quantum states using NSGA-II.
+    
+    Args:
+        N (int): Dimension of the Fock space.
+        u (float): Parameter for quantum operations.
+        c (float): Parameter for quantum operations.
+        k (int): Parameter for quantum operations.
+        projector (Qobj, optional): QuTiP projector object. Defaults to None.
+        initial_kets (list, optional): List of initial quantum states. Defaults to None.
+        pop_size (int, optional): Population size for NSGA-II. Defaults to 500.
+        max_generations (int, optional): Maximum number of generations. Defaults to 2000.
+        num_workers (int, optional): Number of CPU workers for parallel evaluation. Defaults to 12.
+        verbose (bool, optional): Whether to print progress information. Defaults to True.
+        tolerance (float, optional): Convergence tolerance. Defaults to 5e-4.
+        parity (str, optional): Parity of the quantum state ('even' or 'odd'). Defaults to "even".
+        device_id (int, optional): GPU device ID to use. Defaults to 0.
+        
+    Returns:
+        Result: Optimization result object containing the Pareto front and other information.
+        
+    Raises:
+        RuntimeError: If no CUDA-capable GPU devices are found.
+        ValueError: If the specified GPU device is not available.
+        
+    Note:
+        This function implements a hybrid optimization strategy where:
+        1. GPU is used for quantum state operations and objective function evaluation
+        2. CPU workers are used for parallel evaluation of different candidates
+        3. The optimization uses NSGA-II with SBX crossover and polynomial mutation
     """
     logger = setup_logger()
     if not torch.cuda.is_available():
@@ -302,12 +432,22 @@ def optimize_quantum_state_gpu_cpu(
         num_workers = mp.cpu_count()
     logger.info(f"Using {num_workers} CPU processes for parallel evaluation")
 
-    # Create a multiprocessing Pool using the 'spawn' context.
     ctx = get_context("spawn")
     pool = ctx.Pool(processes=num_workers, initializer=init_worker,
                     initargs=(N, u, c, k, parity, projector, device_id))
 
     def parallel_evaluation(X, return_values_of="auto", **kwargs):
+        """
+        Parallel evaluation function that splits work across CPU workers.
+        
+        Args:
+            X (numpy.ndarray): Array of candidates to evaluate.
+            return_values_of (str, optional): Type of values to return. Defaults to "auto".
+            **kwargs: Additional keyword arguments.
+            
+        Returns:
+            dict: Dictionary containing evaluation results with key "F".
+        """
         chunk_size = max(1, X.shape[0] // num_workers)
         chunks = [X[i : i + chunk_size] for i in range(0, X.shape[0], chunk_size)]
         logger.debug(f"Splitting {X.shape[0]} candidates into {len(chunks)} chunks for parallel evaluation")
@@ -318,7 +458,21 @@ def optimize_quantum_state_gpu_cpu(
     problem.evaluate = parallel_evaluation
 
     class MultiInitialStateSampling(FloatRandomSampling):
+        """
+        Custom sampling operator that combines initial states with random samples.
+        """
         def _do(self, problem, n_samples, **kwargs):
+            """
+            Perform sampling by combining initial states with random samples if needed.
+            
+            Args:
+                problem: The optimization problem instance.
+                n_samples (int): Number of samples required.
+                **kwargs: Additional keyword arguments.
+                
+            Returns:
+                numpy.ndarray: Array of sampled states.
+            """
             if n_samples <= len(initial_states):
                 logger.debug(f"Using {n_samples} initial states for sampling")
                 return np.vstack(initial_states[:n_samples])
@@ -377,10 +531,10 @@ def optimize_quantum_state_gpu_cpu(
 
 
 if __name__ == "__main__":
-    # Use the spawn start method.
     mp.set_start_method("spawn", force=True)
     logger = setup_logger()
     logger.info("Starting main program")
+    
     if torch.cuda.is_available():
         device_id = 0
         set_gpu_device_silent(device_id)
@@ -389,6 +543,7 @@ if __name__ == "__main__":
         error_msg = "No CUDA-capable GPU devices found"
         logger.error(error_msg)
         raise RuntimeError(error_msg)
+        
     try:
         logger.info("Starting optimization with default parameters")
         res = optimize_quantum_state_gpu_cpu(

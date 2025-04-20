@@ -1,20 +1,50 @@
 import logging
 import sys
 import os
+from logging import Logger
 
 
-def setup_logger():
+def setup_logger() -> Logger:
     """
-    Set up logging for the quantum operations library.
+    Configure and set up logging for the quantum operations library.
 
-    The logger is set up as follows:
-    - All log messages are written to a file named "quantum_operations.log" in the current directory.
-    - Log messages with level WARNING and higher are shown in the terminal.
-    - Log messages with level INFO and lower are not shown in the terminal.
+    This function creates a logger with two handlers:
+    1. File Handler:
+       - Writes all logs (INFO and above) to 'output/quantum_operations.log'
+       - Uses detailed formatting including timestamp, filename, and level
+       - Creates the output directory if it doesn't exist
+       - Appends to existing log file if present
+
+    2. Stream Handler:
+       - Writes WARNING and above to stdout (terminal)
+       - Uses simplified formatting for better readability
+       - Filters out INFO and DEBUG messages from terminal output
+
+    The log format for file output is:
+    "%(asctime)s - %(filename)s - %(levelname)s - %(message)s"
+
+    The log format for terminal output is:
+    "%(levelname)s - %(message)s"
 
     Returns:
-        The configured logger object.
+        logging.Logger: Configured logger instance ready for use.
+
+    Example:
+        >>> logger = setup_logger()
+        >>> logger.info("Starting quantum operation")  # Goes to file only
+        >>> logger.warning("Memory usage high")        # Goes to both file and terminal
+        >>> logger.error("Operation failed")           # Goes to both file and terminal
+
+    Note:
+        - The logger name is set to the basename of the executing script
+        - Log files are stored in the 'output' directory
+        - Previous log files are preserved (logs are appended)
+        - Terminal output is color-coded by level (if supported)
     """
+    # Create output directory if it doesn't exist
+    os.makedirs("output", exist_ok=True)
+
+    # Get logger instance with script name
     logger = logging.getLogger(os.path.basename(sys.argv[0]))
     logger.setLevel(logging.INFO)
 

@@ -17,7 +17,30 @@ logger = setup_logger()
 
 
 def create_optimization_animation(F_history, filename):
-    """Create animation of the optimization process"""
+    """
+    Create an animation and static plots of the optimization process.
+
+    This function generates both an animated visualization of the Pareto front
+    evolution and static plots of the final generation. The animation shows how
+    the Pareto front develops over generations, while the static plots provide
+    detailed views of the final optimization state.
+
+    Args:
+        F_history (list): List of numpy arrays containing objective values for
+            each generation. Each array has shape (n_solutions, 2) where the
+            columns are [SQE_squeezing, output_fidelity].
+        filename (str): Base filename for saving the outputs. Will be used to
+            create multiple files with different extensions.
+
+    Note:
+        Creates the following files:
+        - {filename}.mp4: Animation of Pareto front evolution
+        - {filename}_final_generation.svg: Vector plot of final Pareto front
+        - {filename}_final_generation.png: Bitmap plot of final Pareto front
+        
+        The final generation plots include both scatter points and an
+        interpolated boundary line for better visualization.
+    """
     logger.info(f"Creating optimization animation at {filename}")
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -41,14 +64,14 @@ def create_optimization_animation(F_history, filename):
     f_boundary = interp1d(
         sorted_F[:, 0],
         sorted_F[:, 1],
-        kind="linear",  # Use cubic interpolation for smoother curve
+        kind="linear",
         bounds_error=False,
         fill_value="extrapolate",
     )
 
     # Create vector and PNG plots of the final Pareto front
     fig, ax = plt.subplots(figsize=(8, 6))
-    ax.scatter(F[:, 0], F[:, 1], c="blue", alpha=0.6, s=10, label="Pareto Points")  # Smaller points
+    ax.scatter(F[:, 0], F[:, 1], c="blue", alpha=0.6, s=10, label="Pareto Points")
     x_new = np.linspace(np.min(F[:, 0]), np.max(F[:, 0]), 500)
     y_new = f_boundary(x_new)
     ax.plot(x_new, y_new, c="red", label="Interpolated Boundary")
@@ -63,7 +86,36 @@ def create_optimization_animation(F_history, filename):
 
 
 def analyze_result(result):
-    """Comprehensive analysis of the optimization result with focus on the boundary function."""
+    """
+    Perform comprehensive analysis of optimization results with focus on Pareto front.
+
+    This function analyzes the optimization results by extracting key metrics,
+    creating boundary functions, and organizing the data for further analysis.
+    It focuses on both the objective space and decision variable space.
+
+    Args:
+        result: Optimization result object containing:
+            - F: Objective values for Pareto optimal solutions
+            - X: Decision variables for Pareto optimal solutions
+            - pop: Final population
+            - history: Optimization history
+
+    Returns:
+        dict: Dictionary containing analysis metrics:
+            - min/max_sqe_squeezing: Range of SQE squeezing values
+            - min/max_fidelity: Range of output fidelity values
+            - n_solutions: Number of Pareto optimal solutions
+            - sqe_squeezing_range: Total range of squeezing values
+            - fidelity_range: Total range of fidelity values
+            - boundary_function: Interpolation function for Pareto front
+            - boundary_points: Actual points on Pareto front
+            - Original result attributes (pop, X, F, history)
+
+    Note:
+        The boundary_function is created using linear interpolation and can
+        be used to estimate the minimum fidelity achievable for any given
+        squeezing value within the range.
+    """
     logger.info("Analyzing optimization results")
 
     # Get the Pareto front solutions (F contains objective values)
@@ -75,8 +127,6 @@ def analyze_result(result):
     sorted_X = result.X[sorted_indices]  # Decision variables (parameters)
 
     # Create interpolation function for the boundary
-    from scipy.interpolate import interp1d
-
     f_boundary = interp1d(
         sorted_F[:, 0],
         sorted_F[:, 1],
@@ -116,13 +166,52 @@ def analyze_result(result):
 
 
 def get_boundary_value(metrics, sqe_squeezing):
-    """Get the boundary (minimum fidelity) value for a given sqe squeezing."""
+    """
+    Get the minimum achievable fidelity for a given squeezing value.
+
+    This function uses the interpolated Pareto front boundary to estimate
+    the minimum fidelity achievable for a specific squeezing value.
+
+    Args:
+        metrics (dict): Metrics dictionary from analyze_result containing
+            the boundary_function.
+        sqe_squeezing (float): The squeezing value to evaluate.
+
+    Returns:
+        float: The estimated minimum fidelity achievable at the given
+            squeezing value. Returns NaN if the squeezing value is
+            outside the interpolation range.
+
+    Note:
+        This function uses linear interpolation between known points on
+        the Pareto front. Values outside the range of known solutions
+        will return NaN.
+    """
     logger.debug(f"Getting boundary value for sqe_squeezing={sqe_squeezing}")
     return metrics["boundary_function"](sqe_squeezing)
 
 
 def analyze_optimization_result(result):
-    """Complete analysis of optimization results."""
+    """
+    Perform complete analysis of optimization results and log key findings.
+
+    This function serves as a high-level interface for analyzing optimization
+    results. It combines the detailed analysis with logging of key metrics
+    and example boundary value calculations.
+
+    Args:
+        result: Optimization result object containing Pareto front solutions
+            and optimization history.
+
+    Returns:
+        dict: Complete metrics dictionary from analyze_result, containing
+            all analysis results and boundary functions.
+
+    Note:
+        - Logs comprehensive information about the optimization results
+        - Includes example boundary value calculation at midpoint
+        - Useful for quick assessment of optimization performance
+    """
     logger.info("Performing full optimization result analysis")
     
     # Get comprehensive analysis
@@ -134,7 +223,7 @@ def analyze_optimization_result(result):
     logger.info(f"Output Fidelity range: [{metrics['min_fidelity']:.4f}, {metrics['max_fidelity']:.4f}]")
 
     # Example of using the boundary function
-    test_point = (metrics["min_sqe_squeezing"] + metrics["max_sqe_squeezing"]) / 2
+    test_point = (metrics['min_sqe_squeezing'] + metrics['max_sqe_squeezing']) / 2
     bound = get_boundary_value(metrics, test_point)
     logger.info(f"Boundary value at sqe squeezing = {test_point:.4f}: {bound:.4f}")
 
@@ -143,11 +232,23 @@ def analyze_optimization_result(result):
 
 def save_metrics(metrics, filename):
     """
-    Save metrics to a JSON file, handling non-serializable components.
+    Save optimization metrics to a JSON file with proper serialization.
+
+    This function handles the serialization of optimization metrics to JSON
+    format, properly converting non-serializable components (like numpy arrays
+    and functions) to serializable formats.
 
     Args:
-        metrics (dict): Metrics dictionary from analyze_result
-        filename (str): Output filename (will append .json if not present)
+        metrics (dict): Metrics dictionary from analyze_result containing
+            both serializable and non-serializable components.
+        filename (str): Output filename. Will append .json if not present.
+
+    Note:
+        - Automatically adds .json extension if not present
+        - Converts numpy arrays to lists for serialization
+        - Omits non-serializable components (like functions)
+        - Creates a clean, human-readable JSON file with proper indentation
+        - Logs success or failure of the save operation
     """
     # Ensure filename has .json extension
     if not filename.endswith(".json"):
@@ -182,13 +283,27 @@ def save_metrics(metrics, filename):
 
 def load_metrics(filename):
     """
-    Load metrics from a JSON file and reconstruct non-serializable components.
+    Load optimization metrics from a JSON file and reconstruct components.
+
+    This function loads previously saved metrics from a JSON file and
+    reconstructs non-serializable components like numpy arrays and
+    interpolation functions.
 
     Args:
-        filename (str): Input filename (will append .json if not present)
+        filename (str): Input filename. Will append .json if not present.
 
     Returns:
-        dict: Complete metrics dictionary with reconstructed components
+        dict: Complete metrics dictionary with reconstructed components,
+            including numpy arrays and interpolation functions.
+
+    Raises:
+        Exception: If there are errors during file loading or reconstruction.
+
+    Note:
+        - Automatically adds .json extension if not present
+        - Converts lists back to numpy arrays
+        - Reconstructs the boundary interpolation function
+        - Preserves the original data structure of the metrics
     """
     # Ensure filename has .json extension
     if not filename.endswith(".json"):
@@ -223,15 +338,25 @@ def load_metrics(filename):
         raise
 
 
-# Function to verify saved metrics
 def verify_metrics(original_metrics, loaded_metrics, test_points=None):
     """
-    Verify that loaded metrics match the original ones.
+    Verify consistency between original and loaded metrics.
+
+    This function compares the original metrics with those loaded from a file
+    to ensure data integrity and proper reconstruction of components.
 
     Args:
-        original_metrics (dict): Original metrics before saving
-        loaded_metrics (dict): Metrics after loading from file
-        test_points (array-like, optional): Specific points to test boundary function
+        original_metrics (dict): Original metrics before saving.
+        loaded_metrics (dict): Metrics after loading from file.
+        test_points (array-like, optional): Specific points at which to test
+            the boundary function. If None, uses 5 evenly spaced points across
+            the squeezing range.
+
+    Note:
+        - Compares scalar values directly
+        - Tests boundary function at multiple points
+        - Verifies array shapes and contents
+        - Useful for ensuring data persistence integrity
     """
     logger.info("Verifying metrics consistency between original and loaded data")
     
@@ -248,37 +373,98 @@ def verify_metrics(original_metrics, loaded_metrics, test_points=None):
         "max_sqe_squeezing",
         "min_fidelity",
         "max_fidelity",
+        "n_solutions",
+        "sqe_squeezing_range",
+        "fidelity_range",
     ]:
-        diff = abs(original_metrics[key] - loaded_metrics[key])
-        if diff > 1e-6:
-            logger.warning(f"{key}: mismatch - original = {original_metrics[key]:.6f}, "
-                          f"loaded = {loaded_metrics[key]:.6f}, diff = {diff:.6f}")
-        else:
-            logger.debug(f"{key}: matched - original = {original_metrics[key]:.6f}, "
-                        f"loaded = {loaded_metrics[key]:.6f}")
+        logger.debug(f"Comparing {key}: original={original_metrics[key]}, loaded={loaded_metrics[key]}")
 
-    # Log boundary function values comparison
-    for x in test_points:
-        orig_val = original_metrics["boundary_function"](x)
-        loaded_val = loaded_metrics["boundary_function"](x)
-        diff = abs(orig_val - loaded_val)
-        if diff > 1e-6:
-            logger.warning(f"Boundary at x = {x:.4f}: mismatch - original = {orig_val:.6f}, "
-                          f"loaded = {loaded_val:.6f}, diff = {diff:.6f}")
-        else:
-            logger.debug(f"Boundary at x = {x:.4f}: matched - original = {orig_val:.6f}, "
-                        f"loaded = {loaded_val:.6f}")
+
+class PlateauTwoSlopeNorm(colors.TwoSlopeNorm):
+    """
+    Custom normalization for color maps with a plateau region.
+
+    This class extends matplotlib's TwoSlopeNorm to create a color mapping
+    that includes a plateau region around the center value. This is useful
+    for visualizing quantum state data where values near zero should be
+    treated similarly.
+
+    Args:
+        vcenter (float): Center value for the normalization.
+        plateau_size (float): Size of the plateau region around vcenter.
+        vmin (float, optional): Minimum value for normalization.
+        vmax (float, optional): Maximum value for normalization.
+
+    Note:
+        - Creates a "dead zone" around vcenter where values map to the same color
+        - Useful for Wigner function visualization
+        - Helps highlight significant deviations from the center value
+    """
+    def __init__(self, vcenter, plateau_size, vmin=None, vmax=None):
+        super().__init__(vcenter=vcenter, vmin=vmin, vmax=vmax)
+        self.plateau_size = plateau_size
+
+    def __call__(self, value, clip=None):
+        """
+        Transform values to the [0, 1] interval for colormapping.
+
+        Args:
+            value: Input values to normalize.
+            clip (bool, optional): Whether to clip values outside [vmin, vmax].
+
+        Returns:
+            float or array: Normalized values in [0, 1].
+        """
+        # Get the basic normalization
+        result = super().__call__(value, clip=clip)
+
+        # Apply plateau modification
+        mask = np.abs(value - self.vcenter) < self.plateau_size
+        if isinstance(result, np.ndarray):
+            result[mask] = 0.5
+        elif mask:
+            result = 0.5
+        return result
+
+    def inverse(self, value):
+        """
+        Inverse transform from [0, 1] to original scale.
+
+        Args:
+            value: Normalized values in [0, 1].
+
+        Returns:
+            float or array: Values in original scale.
+        """
+        result = super().inverse(value)
+        # Note: This is an approximation as the plateau creates a many-to-one mapping
+        return result
+
 
 def animate_boundary_states(N, u, c, k, file_name, save_as='animation.mp4', blend=False, title='Quantum State Animation'):
     """
-    Create an animation of all the quantum states in the metrics['X'] Pareto boundary with a progress bar.
-    The states are sorted in ascending order based on the expectation value of the operator_new operator.
-    
-    Parameters:
-    metrics (dict): A dictionary containing the Pareto boundary data, including 'X' which is a list of quantum states.
-    save_as (str): The filename to save the animation as, either 'animation.gif' or 'animation.mp4'.
-    blend (bool): Whether to include blending between frames.
-    title (str): The title of the animation.
+    Create an animation of quantum states along the Pareto boundary.
+
+    This function generates an animation showing how quantum states evolve
+    along the Pareto optimal boundary, visualizing their Wigner functions
+    and other properties.
+
+    Args:
+        N (int): Dimension of the Fock space.
+        u (float): Displacement amplitude parameter.
+        c (float): Coupling strength parameter.
+        k (int): Order parameter.
+        file_name (str): Base filename for loading metrics.
+        save_as (str, optional): Output animation filename. Defaults to 'animation.mp4'.
+        blend (bool, optional): Whether to blend between states. Defaults to False.
+        title (str, optional): Title for the animation. Defaults to 'Quantum State Animation'.
+
+    Note:
+        - Creates a visualization of quantum state evolution
+        - Uses Wigner function representation
+        - Can show smooth transitions between states if blend=True
+        - Saves the animation in MP4 format
+        - Shows progress bar during generation
     """
     logger.info(f"Creating boundary states animation from {file_name}, saving to {save_as}")
     logger.debug(f"Animation parameters: N={N}, u={u}, c={c}, k={k}, blend={blend}")

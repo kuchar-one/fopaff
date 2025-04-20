@@ -19,7 +19,6 @@ from src.logger import setup_logger
 from qutip import expect, displace, squeeze, basis, Qobj
 
 
-# Set up the logger
 logger = setup_logger()
 
 
@@ -80,7 +79,9 @@ class GPUQuantumParetoProblem(Problem):
         n_var = 2 * N  # Real and imaginary parts
         bound = 10
 
-        logger.info(f"Initializing GPUQuantumParetoProblem with N={N}, u={u}, c={c}, k={k}, device_id={device_id}")
+        logger.info(
+            f"Initializing GPUQuantumParetoProblem with N={N}, u={u}, c={c}, k={k}, device_id={device_id}"
+        )
         logger.debug(f"Squeezing bound calculated: {self.squeezing_bound}")
 
         super().__init__(
@@ -128,7 +129,9 @@ class GPUQuantumParetoProblem(Problem):
             f = torch.zeros((x_gpu.shape[0], 2), device=self.device)
 
             optimal_batch_size = self._check_memory()
-            logger.debug(f"Evaluating {len(x_gpu)} candidates with batch size {optimal_batch_size}")
+            logger.debug(
+                f"Evaluating {len(x_gpu)} candidates with batch size {optimal_batch_size}"
+            )
 
             for i in range(0, len(x_gpu), optimal_batch_size):
                 batch = x_gpu[i : i + optimal_batch_size]
@@ -149,7 +152,9 @@ class GPUQuantumParetoProblem(Problem):
                         # Ensure valid numbers.
                         if torch.isnan(cat_sq) or torch.isinf(cat_sq):
                             cat_sq = torch.tensor(float("inf"), device=self.device)
-                            logger.warning(f"NaN or Inf detected in cat_sq, using infinity")
+                            logger.warning(
+                                f"NaN or Inf detected in cat_sq, using infinity"
+                            )
                         if torch.isnan(out_fid) or torch.isinf(out_fid):
                             out_fid = torch.tensor(1.0, device=self.device)
                             logger.warning(f"NaN or Inf detected in out_fid, using 1.0")
@@ -158,7 +163,9 @@ class GPUQuantumParetoProblem(Problem):
                         if np.real(cat_sq.item()) > self.squeezing_bound:
                             f[i + j, 0] = torch.tensor(1e8, device=self.device)
                             f[i + j, 1] = torch.tensor(1.0, device=self.device)
-                            logger.debug(f"Candidate {i+j} exceeds squeezing bound, assigning worst values")
+                            logger.debug(
+                                f"Candidate {i+j} exceeds squeezing bound, assigning worst values"
+                            )
                         else:
                             f[i + j, 0] = torch.abs(cat_sq)
                             f[i + j, 1] = torch.abs(out_fid)
@@ -202,7 +209,9 @@ class GPUQuantumParetoProblem(Problem):
                 inf_count = torch.sum(inf_mask).item()
                 nan_count = torch.sum(nan_mask).item()
                 if inf_count > 0 or nan_count > 0:
-                    logger.warning(f"Found {inf_count} inf and {nan_count} NaN values in params, replacing them")
+                    logger.warning(
+                        f"Found {inf_count} inf and {nan_count} NaN values in params, replacing them"
+                    )
 
                 # Replace inf with signed LARGE_NUM
                 params[inf_mask] = torch.sign(params[inf_mask]) * LARGE_NUM
@@ -253,8 +262,10 @@ class GPUQuantumParetoProblem(Problem):
                     torch.isnan(states) | torch.isinf(states), dim=1, keepdim=True
                 )
                 invalid_count = torch.sum(invalid_mask).item()
-                logger.warning(f"Found {invalid_count} invalid states after normalization, using fallback states")
-                
+                logger.warning(
+                    f"Found {invalid_count} invalid states after normalization, using fallback states"
+                )
+
                 # Create a valid fallback state that will give a large but finite value
                 # when used in calculations
                 fallback_states = torch.complex(
@@ -297,18 +308,24 @@ class OptimizationCallback(Callback):
             algorithm: The current state of the optimization algorithm.
         """
         generation = algorithm.n_gen
-        if hasattr(algorithm, 'opt') and algorithm.opt is not None:
+        if hasattr(algorithm, "opt") and algorithm.opt is not None:
             opt_F = algorithm.opt.get("F")
             if opt_F is not None:
                 self.data["F"].append(opt_F.copy())
-                min_f1 = opt_F[:, 0].min() if len(opt_F) > 0 else float('inf')
-                min_f2 = opt_F[:, 1].min() if len(opt_F) > 0 else float('inf')
-                self.logger.info(f"Generation {generation}: Min SQE={min_f1:.6f}, Min Fidelity={min_f2:.6f}, " +
-                              f"Population size={len(opt_F)}")
+                min_f1 = opt_F[:, 0].min() if len(opt_F) > 0 else float("inf")
+                min_f2 = opt_F[:, 1].min() if len(opt_F) > 0 else float("inf")
+                self.logger.info(
+                    f"Generation {generation}: Min SQE={min_f1:.6f}, Min Fidelity={min_f2:.6f}, "
+                    + f"Population size={len(opt_F)}"
+                )
             else:
-                self.logger.warning(f"Generation {generation}: No optimal solutions found yet")
+                self.logger.warning(
+                    f"Generation {generation}: No optimal solutions found yet"
+                )
         else:
-            self.logger.warning(f"Generation {generation}: Algorithm optimization data not available")
+            self.logger.warning(
+                f"Generation {generation}: Algorithm optimization data not available"
+            )
 
 
 def optimize_quantum_state_gpu_cpu(
@@ -348,7 +365,7 @@ def optimize_quantum_state_gpu_cpu(
         The optimization result from pymoo's minimize function.
     """
     logger = setup_logger()
-    
+
     # Validate device_id
     if not torch.cuda.is_available():
         error_msg = "No CUDA-capable GPU devices found"
@@ -359,13 +376,13 @@ def optimize_quantum_state_gpu_cpu(
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-    # Set the GPU device
     torch.cuda.set_device(device_id)
 
     if verbose:
-        logger.info(f"Using GPU device {device_id}: {torch.cuda.get_device_name(device_id)}")
+        logger.info(
+            f"Using GPU device {device_id}: {torch.cuda.get_device_name(device_id)}"
+        )
 
-    # If no initial kets are provided, generate a set of candidates.
     if initial_kets is None:
         logger.info("No initial kets provided, generating candidates")
         initial_kets = [
@@ -383,7 +400,6 @@ def optimize_quantum_state_gpu_cpu(
         initial_kets.extend(cats)
         logger.info(f"Generated {len(initial_kets)} initial candidate states")
 
-    # Validate and convert the initial states.
     initial_states = []
     for i, initial_ket in enumerate(initial_kets):
         try:
@@ -402,7 +418,6 @@ def optimize_quantum_state_gpu_cpu(
             logger.error(f"Error processing initial ket {i}: {str(e)}")
             raise
 
-    # Instantiate the optimization problem.
     logger.info("Creating optimization problem instance")
     problem = GPUQuantumParetoProblem(N, u, c, k, parity, projector, device_id)
 
@@ -415,7 +430,9 @@ def optimize_quantum_state_gpu_cpu(
             if n_samples <= len(initial_states):
                 logger.debug(f"Using {n_samples} initial states for sampling")
                 return np.vstack(initial_states[:n_samples])
-            logger.debug(f"Using {len(initial_states)} initial states and {n_samples - len(initial_states)} random samples")
+            logger.debug(
+                f"Using {len(initial_states)} initial states and {n_samples - len(initial_states)} random samples"
+            )
             random_samples = super()._do(
                 problem, n_samples - len(initial_states), **kwargs
             )
@@ -442,7 +459,9 @@ def optimize_quantum_state_gpu_cpu(
         out = {"F": np.zeros((X.shape[0], 2))}
         chunk_size = max(1, X.shape[0] // num_workers)
         chunks = [X[i : i + chunk_size] for i in range(0, X.shape[0], chunk_size)]
-        logger.debug(f"Splitting {X.shape[0]} candidates into {len(chunks)} chunks for parallel evaluation")
+        logger.debug(
+            f"Splitting {X.shape[0]} candidates into {len(chunks)} chunks for parallel evaluation"
+        )
         results = []
         for i, chunk in enumerate(chunks):
             out_chunk = {"F": None}
@@ -452,12 +471,10 @@ def optimize_quantum_state_gpu_cpu(
         out["F"] = np.vstack(results)
         return out
 
-    # Overwrite the problem's evaluation method.
     problem.evaluate = parallel_evaluation
 
     callback = OptimizationCallback()
 
-    # Instantiate our custom termination object.
     termination = DefaultMultiObjectiveTermination(
         xtol=tolerance,
         cvtol=tolerance,
@@ -472,7 +489,9 @@ def optimize_quantum_state_gpu_cpu(
         logger.info(f"Population size: {pop_size}")
         logger.info(f"Maximum generations: {max_generations}")
         logger.info(f"Number of workers: {num_workers}")
-        logger.info(f"GPU Device: {device_id} ({torch.cuda.get_device_name(device_id)})")
+        logger.info(
+            f"GPU Device: {device_id} ({torch.cuda.get_device_name(device_id)})"
+        )
         logger.info("\nTermination Criteria:")
         logger.info(f"xtol: {termination.x.termination.tol}")
         logger.info(f"cvtol: {termination.cv.termination.tol}")
@@ -501,7 +520,7 @@ def optimize_quantum_state_gpu_cpu(
         out_dir = f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}"
     elif parity == "odd":
         out_dir = f"output/{max_generations}_maxgens_{pop_size}_individuals_N{N}_u{u}_c{c}_k{k}_odd"
-    
+
     logger.info(f"Creating output directory: {out_dir}")
     from src.helpers import create_optimization_animation
 
@@ -518,10 +537,12 @@ def optimize_quantum_state_gpu_cpu(
 if __name__ == "__main__":
     logger = setup_logger()
     logger.info("Starting main program")
-    
+
     if torch.cuda.is_available():
         device_id = 0
-        logger.info(f"Using GPU device {device_id}: {torch.cuda.get_device_name(device_id)}")
+        logger.info(
+            f"Using GPU device {device_id}: {torch.cuda.get_device_name(device_id)}"
+        )
     else:
         error_msg = "No CUDA-capable GPU devices found"
         logger.error(error_msg)

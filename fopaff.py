@@ -1,3 +1,29 @@
+"""
+Quantum State Optimization Command Line Interface
+
+This script provides a command-line interface for running quantum state
+optimization using the NSGA-II algorithm. It supports optimization of both
+even and odd parity states with customizable parameters.
+
+The script creates necessary directories for caching operators and storing
+output results, then processes command line arguments to configure and run
+the optimization.
+
+Example:
+    Basic usage with default parameters:
+    $ python fopaff.py
+
+    Custom optimization with specific parameters:
+    $ python fopaff.py --gpu_id 0 -N 30 -u 3 -c 10 -k 100 --pop_size 500 \\
+                       --max_generations 2000 --verbose --parity even
+
+Note:
+    - Creates 'cache' and 'output' directories if they don't exist
+    - Output directory structure includes optimization parameters in the name
+    - Supports both even and odd parity quantum states
+    - Uses GPU acceleration for quantum operations
+"""
+
 import os
 import sys
 import argparse
@@ -12,6 +38,27 @@ if not os.path.exists("output"):
 
 
 def main():
+    """
+    Main function for parsing command line arguments and running optimization.
+
+    This function sets up the argument parser with detailed help messages,
+    processes the command line arguments, creates necessary output directories,
+    and initiates the quantum state optimization process.
+
+    The following parameters can be configured:
+    - GPU device ID
+    - Fock space dimension (N)
+    - Quantum operation parameters (u, c, k)
+    - Population size and maximum generations for NSGA-II
+    - Convergence tolerance
+    - State parity (even/odd)
+    - Verbosity level
+
+    Note:
+        - Creates output directory with parameters encoded in the name
+        - Supports both even and odd parity optimizations
+        - All parameters have reasonable defaults for typical use cases
+    """
     parser = argparse.ArgumentParser(
         description="Quantum State Optimization Script",
         epilog="Run optimization with customizable parameters",
@@ -43,8 +90,19 @@ def main():
         help="Maximum number of generations (default: 2000)",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
-    parser.add_argument("--tolerance", type=float, default=5e-4, help="Tolerance for convergence (default: 1e-6)")
-    parser.add_argument("--parity", type=str, default="even", help="Parity of the state (default: even)")
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=5e-4,
+        help="Tolerance for convergence (default: 5e-4)"
+    )
+    parser.add_argument(
+        "--parity",
+        type=str,
+        default="even",
+        help="Parity of the state (default: even)"
+    )
+
     # Parse arguments
     args = parser.parse_args()
 

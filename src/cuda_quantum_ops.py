@@ -1,15 +1,17 @@
 import sys
 import os
-os.environ['OMP_NUM_THREADS'] = '6'
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.cuda_helpers import DeviceMonitor
-import torch
 import math
+from typing import Optional, Tuple, Union, List
+
 import numpy as np
-from typing import Optional, Tuple
+import torch
 from torch import Tensor
-from qutip import Qobj, destroy, identity, basis, tensor, fidelity, ket2dm, wigner
+from qutip import (
+    Qobj, destroy, identity, basis, tensor,
+    fidelity, ket2dm, wigner
+)
+
+from src.cuda_helpers import DeviceMonitor
 from src.qutip_quantum_ops import (
     catfid,
     operator_new,
@@ -19,18 +21,42 @@ from src.qutip_quantum_ops import (
 )
 from src.logger import setup_logger
 
+# Set OpenMP threads for CPU operations
+os.environ['OMP_NUM_THREADS'] = '6'
+
+# Add parent directory to path for imports
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 logger = setup_logger()
 
 
 class GPUQuantumOps:
-    def __init__(self, N):
-        """
-        Initialize GPUQuantumOps object with a given Hilbert space dimension N.
+    """
+    GPU-accelerated quantum operations for state manipulation and measurement.
+    
+    This class provides GPU-accelerated implementations of common quantum operations
+    including state preparation, measurements, and transformations. It uses PyTorch
+    for GPU acceleration and provides compatibility with QuTiP for verification.
+    
+    Attributes:
+        N (int): Dimension of the Hilbert space.
+        monitor (DeviceMonitor): Monitor for CUDA device usage and memory.
+        device (str): CUDA device identifier (e.g., 'cuda:0').
+        d (torch.Tensor): Destruction operator matrix.
+        identity (torch.Tensor): Identity operator matrix.
+    """
 
-        This creates a DeviceMonitor to track CUDA device usage and prints
-        information about the currently selected device. It also pre-computes
-        operators on the default device (cuda:0) which will be moved to the
-        correct device when using the GPUDeviceWrapper.
+    def __init__(self, N: int) -> None:
+        """
+        Initialize GPU quantum operations with specified Hilbert space dimension.
+
+        Args:
+            N (int): Dimension of the Hilbert space.
+            
+        Note:
+            The class initializes on the default device (cuda:0) and pre-computes
+            common operators. The actual device can be changed later using the
+            GPUDeviceWrapper.
         """
         self.N = N
         self.monitor = DeviceMonitor()
@@ -38,51 +64,55 @@ class GPUQuantumOps:
 
         # Print initial CUDA information
         self.monitor.print_cuda_info()
-        print("\n")
 
         # Pre-compute operators on default device (will be moved by wrapper)
         self.d = self._create_destroy_operator().to(self.device)
         self.identity = torch.eye(N, dtype=torch.complex64).to(self.device)
 
-    def _ensure_same_device(self, *tensors):
+    def _ensure_same_device(self, *tensors: Tensor) -> torch.device:
         """
-        Ensure that all provided tensors are on the same device.
+        Ensure all provided tensors are on the same device.
 
         Args:
             *tensors: Variable length argument list of tensors to check.
 
         Returns:
-            torch.device: The common device of the tensors, or the default device if no tensors are provided.
+            torch.device: The common device of the tensors, or the default device if no tensors provided.
 
         Raises:
             RuntimeError: If tensors are found on different devices.
         """
-
         devices = {t.device for t in tensors if torch.is_tensor(t)}
         if len(devices) > 1:
             raise RuntimeError(f"Tensors found on different devices: {devices}")
         return list(devices)[0] if devices else self.device
 
-    def beam_splitter(self, one_in, two_in, theta=np.pi / 4):
+    def beam_splitter(
+        self,
+        one_in: Tensor,
+        two_in: Tensor,
+        theta: float = np.pi / 4
+    ) -> Tensor:
         """
         Simulate a beam splitter operation on two input quantum states.
 
-        This function applies a beam splitter transformation to two input
-        density matrices, `one_in` and `two_in`, using a specified angle `theta`.
+        This function applies a beam splitter transformation to two input states using
+        a specified mixing angle. The transformation is implemented using a unitary
+        operator that is cached for efficiency.
 
         Args:
-            one_in (torch.Tensor): The first input quantum state, represented as a
-                density matrix or a state vector.
-            two_in (torch.Tensor): The second input quantum state, represented as a
-                density matrix or a state vector.
-            theta (float, optional): The angle of the beam splitter in radians. Default
-                is π/4.
+            one_in (torch.Tensor): First input quantum state (density matrix or state vector).
+            two_in (torch.Tensor): Second input quantum state (density matrix or state vector).
+            theta (float, optional): Beam splitter mixing angle in radians. Defaults to π/4.
 
         Returns:
-            torch.Tensor: The resulting quantum state after applying the beam splitter
-            transformation, as a density matrix.
+            torch.Tensor: Resulting quantum state after beam splitter transformation.
+            
+        Note:
+            - The beam splitter unitary is cached to disk for reuse.
+            - If matrix exponential fails, falls back to Taylor series approximation.
+            - Input states are automatically converted to density matrices if given as vectors.
         """
-
         # Cache handling with device awareness
         cache_dir = os.path.join("cache", "operators")
         os.makedirs(cache_dir, exist_ok=True)
@@ -95,68 +125,67 @@ class GPUQuantumOps:
             one_in = one_in.to(self.device)
             two_in = two_in.to(self.device)
 
-            # Rest of the method remains the same but uses self.device explicitly
+            # Create beam splitter operator
             d1 = self.tensor_product(self.d, self.identity)
             d2 = self.tensor_product(self.identity, self.d)
-
-            op = -theta * (
-                torch.matmul(d1.T.conj(), d2) - torch.matmul(d2.T.conj(), d1)
-            )
+            op = -theta * (torch.matmul(d1.T.conj(), d2) - torch.matmul(d2.T.conj(), d1))
 
             try:
                 U = torch.matrix_exp(op)
                 torch.save(U.cpu(), cache_path)
-            except Exception:
-                print("Warning: Matrix exponential failed, using fallback method")
+            except Exception as e:
+                logger.warning(f"Matrix exponential failed: {str(e)}, using Taylor series approximation")
                 U = torch.eye(op.shape[0], dtype=op.dtype, device=self.device)
                 op_power = torch.eye(op.shape[0], dtype=op.dtype, device=self.device)
                 for i in range(1, 10):
                     op_power = torch.matmul(op_power, op) / i
                     U = U + op_power
 
+        # Convert state vectors to density matrices if needed
         if len(one_in.shape) == 1:
             one_in = torch.outer(one_in, one_in.conj())
         if len(two_in.shape) == 1:
             two_in = torch.outer(two_in, two_in.conj())
 
+        # Apply beam splitter transformation
         input_dm = self.tensor_product(one_in, two_in)
         result = torch.matmul(torch.matmul(U.T.conj(), input_dm), U)
 
         return result.to(self.device)
 
-    def breeding_gpu(self, rounds, input_state, projector):
+    def breeding_gpu(
+        self,
+        rounds: int,
+        input_state: Tensor,
+        projector: Tensor
+    ) -> Tensor:
         """
         Simulate the breeding protocol to generate a GKP state.
 
-        This function applies the breeding protocol to an input quantum state
-        `input_state` and a measurement projector `projector`, repeating the
-        process `rounds` times. The resulting quantum state is returned as a
-        density matrix.
+        This function implements an iterative breeding protocol that applies beam splitter
+        operations and measurements to generate grid states. The protocol is repeated
+        for a specified number of rounds.
 
         Args:
-            rounds (int): The number of breeding rounds.
-            input_state (torch.Tensor): The input quantum state, represented as a
-                density matrix or a state vector.
-            projector (torch.Tensor): The measurement projector, represented as a
-                matrix.
+            rounds (int): Number of breeding protocol iterations.
+            input_state (torch.Tensor): Input quantum state (density matrix or state vector).
+            projector (torch.Tensor): Measurement projector matrix.
 
         Returns:
-            torch.Tensor: The resulting quantum state after applying the breeding
-            protocol, as a density matrix.
+            torch.Tensor: Final quantum state after breeding protocol.
+            
+        Note:
+            The breeding protocol consists of:
+            1. Applying a 50:50 beam splitter to two copies of the input state
+            2. Measuring one mode using the provided projector
+            3. Using the post-measurement state as input for the next round
         """
         input_state = input_state.to(self.device)
         projector = projector.to(self.device)
 
         device = self._ensure_same_device(input_state, projector)
-        # logger.info(f"breeding_gpu: Ensuring tensors are on device {device}")
-        # logger.info(f"Input state device: {input_state.device}")
-        # logger.info(f"Projector device: {projector.device}")
-
         input_state = input_state.to(device)
         projector = projector.to(device)
-
-        # logger.info(f"Input state moved to device: {input_state.device}")
-        # logger.info(f"Projector moved to device: {projector.device}")
 
         if rounds == 0:
             return input_state
@@ -167,17 +196,30 @@ class GPUQuantumOps:
 
         return output_state.to(self.device)
 
-    def measure_mode(self, two_mode_dm, projector, mode):
+    def measure_mode(
+        self,
+        two_mode_dm: Tensor,
+        projector: Tensor,
+        mode: int
+    ) -> Tensor:
         """
-        Perform a measurement on the given two-mode density matrix using the specified projector.
+        Perform a projective measurement on one mode of a two-mode quantum state.
 
         Args:
-            two_mode_dm (torch.Tensor): The two-mode density matrix to be measured.
-            projector (torch.Tensor): The projector used to measure the first mode.
-            mode (int): The mode to be measured. Must be 1 or 2.
+            two_mode_dm (torch.Tensor): Two-mode quantum state density matrix.
+            projector (torch.Tensor): Projector for the measurement.
+            mode (int): Which mode to measure (1 or 2).
 
         Returns:
-            torch.Tensor: The resulting density matrix after measurement.
+            torch.Tensor: Post-measurement quantum state.
+            
+        Raises:
+            ValueError: If mode is not 1 or 2.
+            
+        Note:
+            The measurement operator is cached to disk for efficiency.
+            The measurement projects onto the subspace defined by the projector
+            and traces out the measured mode.
         """
         two_mode_dm = two_mode_dm.to(self.device)
         projector = projector.to(self.device)
@@ -212,33 +254,38 @@ class GPUQuantumOps:
 
         return conditional_dm.to(self.device)
 
-    def get_free_memory(self):
+    def get_free_memory(self) -> float:
         """
-        Get the amount of free memory in the current PyTorch device in MB.
+        Get the amount of free memory in the current PyTorch device.
 
         Returns:
-            int: The amount of free memory in MB.
+            float: The amount of free memory in megabytes (MB).
+            
+        Note:
+            Returns 0 if CUDA is not available.
         """
         if torch.cuda.is_available():
             return torch.cuda.memory_allocated() / (1024**2)  # Convert bytes to MB
         return 0
 
-    def _create_destroy_operator(self, offset=0):
+    def _create_destroy_operator(self, offset: int = 0) -> Tensor:
         """
-        Create the destruction (lowering) operator in PyTorch for N dimensions.
+        Create the destruction (lowering) operator in the Fock basis.
 
-        Parameters
-        ----------
-        N : int
-            Number of basis states in the Hilbert space.
-        offset : int, default: 0
-            The lowest number state that is included in the finite number state
-            representation of the operator.
+        This operator acts on quantum states by lowering their energy level,
+        transforming |n⟩ to √n|n-1⟩. It is a fundamental operator in quantum optics.
 
-        Returns
-        -------
-        d : torch.Tensor
-            The lowering operator as a complex matrix.
+        Args:
+            offset (int, optional): The lowest number state included in the finite
+                number state representation. Defaults to 0.
+
+        Returns:
+            torch.Tensor: The lowering operator as a complex matrix.
+            
+        Note:
+            The matrix elements are given by:
+            ⟨n-1|a|n⟩ = √(n + offset)
+            where n ranges from 1 to N-1.
         """
         # Initialize the destruction operator matrix with zeros on the GPU
         d = torch.zeros((self.N, self.N), dtype=torch.complex64).cuda()
@@ -251,15 +298,23 @@ class GPUQuantumOps:
 
         return d
 
-    def expect(self, operator, state):
-        """Calculate expectation value of an operator with respect to a state
+    def expect(self, operator: Tensor, state: Tensor) -> Tensor:
+        """
+        Calculate the expectation value of an operator with respect to a state.
+
+        Computes either ⟨ψ|A|ψ⟩ for pure states or Tr(ρA) for mixed states.
 
         Args:
-            operator: Complex tensor representing the operator
-            state: Complex tensor representing the quantum state
+            operator (torch.Tensor): Complex tensor representing the operator A.
+            state (torch.Tensor): Complex tensor representing the quantum state
+                (either a state vector |ψ⟩ or density matrix ρ).
 
         Returns:
-            Complex tensor representing expectation value <ψ|A|ψ>
+            torch.Tensor: Complex tensor representing the expectation value.
+            
+        Note:
+            For pure states (vectors), computes the inner product ⟨ψ|A|ψ⟩.
+            For mixed states (density matrices), computes the trace Tr(ρA).
         """
         # Handle pure states
         if len(state.shape) == 1:
@@ -268,73 +323,79 @@ class GPUQuantumOps:
         else:
             return torch.trace(torch.matmul(operator, state))
 
-    def tensor_product(self, A, B):
+    def tensor_product(self, A: Tensor, B: Tensor) -> Tensor:
         """
-        Calculate the tensor product of two PyTorch tensors.
+        Calculate the tensor (Kronecker) product of two quantum operators or states.
 
-        Parameters
-        ----------
-        A : torch.Tensor
-            First tensor to calculate the tensor product with.
-        B : torch.Tensor
-            Second tensor to calculate the tensor product with.
+        The tensor product is a fundamental operation in quantum mechanics that
+        combines two separate quantum systems into a joint system.
 
-        Returns
-        -------
-        result : torch.Tensor
-            The tensor product of A and B.
+        Args:
+            A (torch.Tensor): First tensor (operator or state).
+            B (torch.Tensor): Second tensor (operator or state).
+
+        Returns:
+            torch.Tensor: The tensor product A ⊗ B.
+            
+        Note:
+            If A is m×n and B is p×q, the result will be (mp)×(nq).
+            The operation preserves the type (complex/real) of the inputs.
         """
         return torch.kron(A, B)
 
-    def displace(self, alpha):
+    def displace(self, alpha: complex) -> Tensor:
         """
-        Generate the displacement operator for a given complex amplitude.
+        Generate the displacement operator D(α) for a given complex amplitude.
 
-        This function creates a displacement operator, which is a fundamental
-        operation in quantum optics, corresponding to a shift in phase space.
+        The displacement operator implements phase-space translations, creating
+        coherent states when applied to the vacuum state.
 
-        Parameters
-        ----------
-        alpha : complex
-            The complex amplitude representing the displacement in phase space.
+        Args:
+            alpha (complex): Complex amplitude representing the displacement in phase space.
 
-        Returns
-        -------
-        torch.Tensor
-            The displacement operator as a complex matrix on the GPU.
+        Returns:
+            torch.Tensor: The displacement operator exp(αa† - α*a) as a complex matrix.
+            
+        Note:
+            The displacement operator is unitary: D†(α)D(α) = I.
+            It transforms the annihilation operator as: D†(α)aD(α) = a + α.
         """
-
         alpha = torch.complex(
             torch.tensor(float(alpha.real)), torch.tensor(float(alpha.imag))
         ).cuda()
         op = alpha * self.d.T.conj() - alpha.conj() * self.d
         return torch.matrix_exp(op)
 
-    def squeeze(self, z, offset=0):
-        """Generate the single-mode squeezing operator on GPU with PyTorch.
-
-        Parameters
-        ----------
-        N : int
-            Dimension of the Hilbert space.
-        z : complex
-            Squeezing parameter.
-        offset : int, default=0
-            The lowest number state that is included in the finite number state
-            representation of the operator.
-
-        Returns
-        -------
-        squeeze_op : torch.Tensor
-            The squeezing operator as a complex matrix.
+    def squeeze(self, z: complex, offset: int = 0) -> Tensor:
         """
-        # Convert the squeezing parameter `z` to a complex tensor on GPU.
+        Generate the single-mode squeezing operator S(z).
+
+        The squeezing operator creates squeezed states by reducing quantum noise
+        in one quadrature at the expense of increased noise in the conjugate quadrature.
+
+        Args:
+            z (complex): Squeezing parameter r*exp(iθ), where r is the squeezing
+                magnitude and θ is the squeezing angle.
+            offset (int, optional): The lowest number state included in the finite
+                number state representation. Defaults to 0.
+
+        Returns:
+            torch.Tensor: The squeezing operator exp((z*a†a† - z*aa)/2) as a complex matrix.
+            
+        Note:
+            The squeezing operator is unitary: S†(z)S(z) = I.
+            It transforms the quadratures as:
+            X → X*cosh(r) + P*sinh(r)
+            P → P*cosh(r) - X*sinh(r)
+            where r = |z| and θ = arg(z).
+        """
+        # Convert the squeezing parameter to a complex tensor on GPU
         z = torch.complex(
             torch.tensor(z.real, dtype=torch.float32),
             torch.tensor(z.imag, dtype=torch.float32),
         ).cuda()
 
-        # Create the destruction operator squared, `asq`.
+        # Create the destruction operator squared
         asq = self.d @ self.d  # This is `destroy(N) ** 2` in qutip
 
         # Calculate the matrix exponent argument for squeezing
@@ -345,17 +406,27 @@ class GPUQuantumOps:
 
         return squeeze_op
 
-    def partial_trace(self, rho, mode):
+    def partial_trace(self, rho: Tensor, mode: int) -> Tensor:
         """
-        Compute partial trace over one mode in a two-mode density matrix.
+        Compute the partial trace over one mode of a two-mode quantum state.
+
+        The partial trace is used to obtain the reduced density matrix of a subsystem
+        by tracing out the other subsystem.
 
         Args:
-            rho (torch.Tensor): Two-mode density matrix.
-            N (int): Dimension of truncated Fock space.
-            mode (int): Mode to trace out (0 or 1).
+            rho (torch.Tensor): Two-mode density matrix of shape (N²×N²).
+            mode (int): Which mode to trace out (0 or 1).
 
         Returns:
-            torch.Tensor: Resulting density matrix after tracing out specified mode.
+            torch.Tensor: The reduced density matrix of shape (N×N).
+            
+        Raises:
+            ValueError: If mode is not 0 or 1.
+            
+        Note:
+            For a two-mode state ρAB, the partial trace over B gives:
+            ρA = TrB(ρAB) = ∑⟨i|B ρAB|i⟩B
+            where {|i⟩B} is a basis for system B.
         """
         # Reshape to separate modes
         rho = rho.view(self.N, self.N, self.N, self.N)  # (i1, i2, j1, j2)
@@ -368,46 +439,33 @@ class GPUQuantumOps:
         else:
             raise ValueError("Mode must be 0 or 1 for partial trace.")
 
-    def fidelity(self, A, B):
+    def fidelity(self, A: Tensor, B: Tensor) -> Tensor:
         """
-        Calculate the fidelity between two states.
+        Calculate the quantum fidelity between two quantum states.
 
-        The fidelity is a measure of the closeness of two quantum states.
-        It is defined as the square of the absolute value of the overlap
-        between the two states.
+        The fidelity F(ρ,σ) is a measure of the "closeness" of two quantum states ρ and σ.
+        For pure states |ψ⟩ and |φ⟩, it reduces to |⟨ψ|φ⟩|².
 
-        Parameters
-        ----------
-        A : torch.Tensor
-            First state.
-        B : torch.Tensor
-            Second state.
+        Args:
+            A (torch.Tensor): First quantum state (pure state vector or density matrix).
+            B (torch.Tensor): Second quantum state (pure state vector or density matrix).
 
-        Returns
-        -------
-        fidelity_value : torch.Tensor
-            The fidelity between the two states.
-
-        Notes
-        -----
-        This function first converts the input tensors to numpy arrays
-        and checks for NaN/inf values. If any are found, it attempts to
-        recover the state by removing tiny values. If the state is still
-        invalid after recovery, the function returns 0.0.
-
-        The function then normalizes the states using the `normalize_state`
-        function and calculates the fidelity using QuTiP's fidelity function.
-        If the result is invalid, it falls back to a pure state calculation
-        if the input tensors are both 1D (i.e. pure states).
-
-        If any errors occur during the calculation, the function returns 0.0.
+        Returns:
+            torch.Tensor: The fidelity value between 0 and 1.
+            
+        Note:
+            - For pure states |ψ⟩ and |φ⟩: F = |⟨ψ|φ⟩|²
+            - For mixed states ρ and σ: F = Tr[√(√ρσ√ρ)]²
+            - Returns 0.0 if calculation fails or states are invalid
+            - Handles NaN/inf values by attempting state recovery
+            - Automatically normalizes input states
         """
         A_np = A.detach().cpu().numpy()
         B_np = B.detach().cpu().numpy()
 
         # Check for NaN/inf values before proceeding
         if np.any(np.isnan(A_np)) or np.any(np.isinf(A_np)):
-            print("Warning: NaN/inf detected in first state. Attempting recovery.")
+            logger.warning("NaN/inf detected in first state. Attempting recovery.")
             # Try to recover the state by removing tiny values
             A_np[np.abs(A_np) < 1e-10] = 0
             A_np[np.isnan(A_np)] = 0
@@ -415,14 +473,14 @@ class GPUQuantumOps:
                 return torch.tensor(0.0, dtype=A.dtype, device=A.device)
 
         if np.any(np.isnan(B_np)) or np.any(np.isinf(B_np)):
-            print("Warning: NaN/inf detected in second state. Attempting recovery.")
+            logger.warning("NaN/inf detected in second state. Attempting recovery.")
             B_np[np.abs(B_np) < 1e-10] = 0
             B_np[np.isnan(B_np)] = 0
             if np.any(np.isnan(B_np)) or np.any(np.isinf(B_np)):
                 return torch.tensor(0.0, dtype=A.dtype, device=A.device)
 
-        # Ensure proper normalization
-        def normalize_state(state):
+        def normalize_state(state: np.ndarray) -> np.ndarray:
+            """Normalize a quantum state vector or density matrix."""
             if state.ndim == 1:  # Pure state
                 norm = np.sqrt(np.abs(np.sum(np.conj(state) * state)))
                 if norm > 1e-10:  # Only normalize if norm is not too small
@@ -449,7 +507,8 @@ class GPUQuantumOps:
                 if np.isnan(fidelity_value) or np.isinf(fidelity_value):
                     return torch.tensor(0.0, dtype=A.dtype, device=A.device)
                 return torch.tensor(fidelity_value, dtype=A.dtype, device=A.device)
-            except:
+            except Exception as e:
+                logger.warning(f"QuTiP fidelity calculation failed: {str(e)}")
                 # Fallback calculation for pure states
                 if A.dim() == 1 and B.dim() == 1:
                     overlap = np.abs(np.sum(np.conj(A_np) * B_np)) ** 2
@@ -457,30 +516,42 @@ class GPUQuantumOps:
                 return torch.tensor(0.0, dtype=A.dtype, device=A.device)
 
         except Exception as e:
-            print(f"Error in fidelity calculation: {str(e)}")
+            logger.error(f"Error in fidelity calculation: {str(e)}")
             return torch.tensor(0.0, dtype=A.dtype, device=A.device)
 
-    def beam_splitter_qutip(self, one_in, two_in, theta=np.pi / 4):
-        """Optimized beam splitter interaction
+    def beam_splitter_qutip(
+        self,
+        one_in: Qobj,
+        two_in: Qobj,
+        theta: float = np.pi / 4
+    ) -> Qobj:
+        """
+        Implement a beam splitter interaction using QuTiP.
+
+        This is a reference implementation using QuTiP for verification purposes.
+        For performance-critical applications, use the GPU-accelerated beam_splitter method.
 
         Args:
-            N (int): truncated Fock space dimension
-            one_in (ket or oper): first mode input
-            two_in (ket or oper): second mode input
-            theta (float, optional): BS parameter, balanced default
+            one_in (Qobj): First input mode (ket or density matrix).
+            two_in (Qobj): Second input mode (ket or density matrix).
+            theta (float, optional): Beam splitter mixing angle in radians. Defaults to π/4.
 
         Returns:
-            oper: two-mode output density matrix
+            Qobj: Two-mode output density matrix.
+            
+        Note:
+            The beam splitter transformation is:
+            a₁ → a₁cos(θ) - a₂sin(θ)
+            a₂ → a₁sin(θ) + a₂cos(θ)
+            where a₁, a₂ are the mode operators.
         """
-        N = self.N
-
         # Convert inputs to density matrices if needed
         one_dm = ket2dm(one_in) if one_in.type == "ket" else one_in
         two_dm = ket2dm(two_in) if two_in.type == "ket" else two_in
 
         # Create destruction operators using QutIP's tensor
-        destroy_one = tensor(destroy(N), identity(N))
-        destroy_two = tensor(identity(N), destroy(N))
+        destroy_one = tensor(destroy(self.N), identity(self.N))
+        destroy_two = tensor(identity(self.N), destroy(self.N))
 
         # Compute the unitary operator
         generator = -theta * (
@@ -492,21 +563,39 @@ class GPUQuantumOps:
         input_dm = tensor(one_dm, two_dm)
         return unitary.dag() * input_dm * unitary
 
-    def measure_mode_qutip(self, two_mode_dm, projector, mode):
-        """Optimized projection measurement of two mode state
+    def measure_mode_qutip(
+        self,
+        two_mode_dm: Qobj,
+        projector: Qobj,
+        mode: int
+    ) -> Qobj:
+        """
+        Perform a projective measurement on a two-mode state using QuTiP.
+
+        This is a reference implementation using QuTiP for verification purposes.
+        For performance-critical applications, use the GPU-accelerated measure_mode method.
 
         Args:
-            N (int): truncated Fock space dimension
-            two_mode_dm (oper): two mode state density operator
-            projector (oper): measurement projection
-            mode (1 or 2): mode number
+            two_mode_dm (Qobj): Two-mode quantum state density operator.
+            projector (Qobj): Measurement projection operator.
+            mode (int): Which mode to measure (1 or 2).
 
         Returns:
-            oper: conditional output density matrix in untouched mode
+            Qobj: Normalized post-measurement state in the untouched mode.
+            
+        Raises:
+            ValueError: If mode is not 1 or 2.
+            
+        Note:
+            The measurement process:
+            1. Applies the projector to the specified mode
+            2. Traces out the measured mode
+            3. Normalizes the resulting state
         """
-        N = self.N
+        if mode not in [1, 2]:
+            raise ValueError("Mode must be 1 or 2.")
 
-        id_N = identity(N)
+        id_N = identity(self.N)
 
         # Pre-compute measurement operator
         measurement = tensor(projector, id_N) if mode == 1 else tensor(id_N, projector)
@@ -517,14 +606,22 @@ class GPUQuantumOps:
 
         return traced_state.unit()
 
-    def verify_catfid(self, num_states=10):
+    def verify_catfid(self, num_states: int = 10) -> None:
         """
-        Verify that the catfid calculations are consistent between QuTiP and PyTorch-based GPU implementations.
+        Verify the consistency between QuTiP and GPU implementations of cat state fidelity.
+
+        This method generates random test states and compares the fidelity calculations
+        between the QuTiP-based and GPU-accelerated implementations to ensure they
+        produce consistent results within numerical precision.
 
         Args:
-            num_states (int): Number of random states to generate for the verification.
+            num_states (int, optional): Number of random test states to generate. Defaults to 10.
+            
+        Note:
+            - Prints comparison results and statistics
+            - Useful for debugging and validation
+            - Does not return a value but raises warnings if discrepancies are found
         """
-
         # Generate random states
         states = []
         for _ in range(num_states):
@@ -564,44 +661,43 @@ class GPUQuantumOps:
 
         print("Verification successful!")
 
-    def catfid_gpu(self, state, u, parity, c, k, projector, operator=None):
+    def catfid_gpu(
+        self,
+        state: Tensor,
+        u: float,
+        parity: str,
+        c: int,
+        k: int,
+        projector: Tensor,
+        operator: Optional[Tensor] = None
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Compute the cat squeezing and output fidelity for a given quantum state using GPU acceleration.
+        Compute cat squeezing and output fidelity for a quantum state using GPU acceleration.
 
-        This function calculates the cat squeezing and the fidelity between an evolved quantum
-        state and an ideal squeezed Schrödinger cat state. It leverages GPU-accelerated operations
-        to perform the calculations efficiently.
+        This method calculates two key metrics for cat state preparation:
+        1. Cat squeezing: A measure of how well the state approximates an ideal cat state
+        2. Output fidelity: The overlap between the measured state and an ideal squeezed cat state
 
-        Parameters
-        ----------
-        state : torch.Tensor
-            The input quantum state represented as a complex-valued tensor.
-        u : float
-            Displacement amplitude used in the preparation of the ideal state.
-        parity : str
-            Specifies the parity of the ideal state ("even" or "odd").
-        c : int
-            A parameter used in the operator generation.
-        k : int
-            A parameter used in the operator generation.
-        projector : torch.Tensor
-            The projector used in the measurement step.
-        operator : torch.Tensor, optional
-            Pre-computed operator for squeezing calculation. If not provided, it is generated internally.
+        Args:
+            state (torch.Tensor): Input quantum state (normalized state vector).
+            u (float): Displacement amplitude for the ideal cat state.
+            parity (str): Type of cat state to compare against ("even" or "odd").
+            c (int): Parameter for operator generation (code distance).
+            k (int): Parameter for operator generation (Fock space cutoff).
+            projector (torch.Tensor): Measurement projector.
+            operator (torch.Tensor, optional): Pre-computed squeezing operator.
+                If None, generated internally. Defaults to None.
 
-        Returns
-        -------
-        Tuple[torch.Tensor, torch.Tensor]
-            A tuple containing the calculated cat squeezing and the output fidelity. Both are returned
-            as complex-valued tensors.
-
-        Notes
-        -----
-        The function falls back to using QuTiP functions if invalid (NaN or inf) values are detected
-        in the output state during computation.
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Cat squeezing and output fidelity values.
+            
+        Note:
+            - Falls back to QuTiP implementation if numerical instabilities occur
+            - The ideal state is constructed as (D(u/2) ± D(-u/2))S(r)|0⟩
+              where D is displacement, S is squeezing, and ± depends on parity
+            - All operations are performed on GPU for efficiency
         """
-
-        if operator == None:
+        if operator is None:
             operator = self.operator_new_gpu(u, 0, c, k)
 
         # Calculate cat squeezing
@@ -628,8 +724,7 @@ class GPUQuantumOps:
 
         # Check for NaN or inf in output_state
         if torch.any(torch.isnan(output_state)) or torch.any(torch.isinf(output_state)):
-            # Fallback to using qutip functions
-            print("Falling back to QuTiP functions.")
+            logger.warning("Numerical instability detected, falling back to QuTiP implementation.")
             state_qobj = Qobj(state.detach().cpu().numpy())
             output_state_qobj = self.measure_mode_qutip(
                 self.beam_splitter_qutip(state_qobj, basis(self.N, 0)),
@@ -645,45 +740,74 @@ class GPUQuantumOps:
 
         return cat_squeezing, output_fidelity
 
-    def gkp_operator_gpu(self):
+    def gkp_operator_gpu(self) -> Tensor:
         """
-        Return the GKP operator as a GPU tensor.
+        Generate the GKP (Gottesman-Kitaev-Preskill) operator on GPU.
 
-        This function generates the GKP operator matrix using QuTiP and then
-        converts it to a PyTorch tensor, which is then moved to the GPU.
+        The GKP operator is used to measure the quality of GKP state preparation.
+        It is constructed to detect the characteristic properties of grid states.
 
-        Returns
-        -------
-        torch.Tensor
-            The GKP operator matrix as a complex-valued tensor on the GPU.
+        Returns:
+            torch.Tensor: GKP operator matrix as a complex tensor on GPU.
+            
+        Note:
+            Uses QuTiP's gkp_operator_new function for initial construction,
+            then converts to GPU tensor for efficient computation.
         """
         op = gkp_operator_new(self.N)
         return torch.tensor(op.full(), dtype=torch.complex64).cuda()
 
-    # TODO: actually implement this
-    def gkp_operator_odd_gpu(self):
+    def gkp_operator_odd_gpu(self) -> Tensor:
+        """
+        Generate the odd-parity GKP operator on GPU.
+
+        This is a placeholder implementation that currently returns the same
+        operator as gkp_operator_gpu(). A proper implementation should generate
+        an operator specific to odd-parity GKP states.
+
+        Returns:
+            torch.Tensor: Odd-parity GKP operator matrix as a complex tensor on GPU.
+            
+        Note:
+            TODO: Implement proper odd-parity GKP operator construction.
+        """
         op = gkp_operator_new(self.N)
         return torch.tensor(op.full(), dtype=torch.complex64).cuda()
 
     def catgkp_gpu(
-        self, state, rounds, c, k, projector, operator=None, gkp_operator=None
-    ):
+        self,
+        state: Tensor,
+        rounds: int,
+        c: int,
+        k: int,
+        projector: Tensor,
+        operator: Optional[Tensor] = None,
+        gkp_operator: Optional[Tensor] = None
+    ) -> Tuple[Tensor, Tensor]:
         """
-        Calculate cat squeezing and GKP squeezing of a given state.
+        Calculate cat and GKP squeezing metrics for a quantum state.
+
+        This method evaluates how well a state approximates both a cat state and
+        a GKP state by computing their respective squeezing parameters.
 
         Args:
-            state (torch.Tensor): The input state as a complex-valued tensor.
-            rounds (int): The number of rounds of the breeding protocol.
-            c (int): The code distance of the GKP code.
-            k (int): The number of Fock states to include in the GKP code.
-            projector (torch.Tensor): The projector onto the first Fock state.
-            operator (torch.Tensor, optional): The operator to use for calculating cat squeezing.
-                If not provided, the default operator is used.
-            gkp_operator (torch.Tensor, optional): The GKP operator to use for calculating GKP squeezing.
-                If not provided, the default GKP operator is used.
+            state (torch.Tensor): Input quantum state (normalized state vector).
+            rounds (int): Number of breeding protocol iterations.
+            c (int): Code distance parameter.
+            k (int): Fock space cutoff parameter.
+            projector (torch.Tensor): Measurement projector.
+            operator (torch.Tensor, optional): Pre-computed cat squeezing operator.
+                If None, generated internally. Defaults to None.
+            gkp_operator (torch.Tensor, optional): Pre-computed GKP operator.
+                If None, generated internally. Defaults to None.
 
         Returns:
-            tuple: The cat squeezing and GKP squeezing as a tuple.
+            Tuple[torch.Tensor, torch.Tensor]: Cat squeezing and GKP squeezing values.
+            
+        Note:
+            - The displacement amplitude u is calculated based on the number of rounds
+            - Uses breeding protocol to transform the input state
+            - Falls back to QuTiP implementation if numerical instabilities occur
         """
         u = 2 * np.sqrt(2) * np.sqrt(np.pi) * 2 ** ((rounds - 3) / 2)
 
@@ -718,14 +842,22 @@ class GPUQuantumOps:
 
         return cat_squeezing, gkp_squeezing
 
-    def verify_catgkp(self, num_states=10):
+    def verify_catgkp(self, num_states: int = 10) -> None:
         """
-        Verify that the catfid calculations are consistent between QuTiP and PyTorch-based GPU implementations.
+        Verify consistency between QuTiP and GPU implementations of cat-GKP metrics.
+
+        This method generates random test states and compares the cat squeezing and
+        GKP squeezing calculations between the QuTiP-based and GPU-accelerated
+        implementations to ensure they produce consistent results.
 
         Args:
-            num_states (int): Number of random states to generate for the verification.
+            num_states (int, optional): Number of random test states to generate. Defaults to 10.
+            
+        Note:
+            - Prints comparison results and statistics
+            - Raises AssertionError if results don't match within tolerance
+            - Uses atol=1e-4 for numerical comparisons
         """
-
         # Generate random states
         states = []
         for _ in range(num_states):
@@ -744,7 +876,7 @@ class GPUQuantumOps:
         for state in states:
             # Calculate catfid using QuTiP
             state_qobj = Qobj(state.detach().cpu().numpy())
-            print(f"State: {state_qobj}")
+            logger.debug(f"Testing state: {state_qobj}")
             cat_sq_qutip, gkp_sq_qutip = catgkp(
                 self.N, state_qobj, rounds, c, k, projector
             )
@@ -755,11 +887,10 @@ class GPUQuantumOps:
             )
 
             # Compare the results
-            print(f"State: {state}")
-            print(
+            logger.info(
                 f"Cat Squeezing: QuTiP = {cat_sq_qutip:.4f}, PyTorch = {cat_sq_torch:.4f}"
             )
-            print(
+            logger.info(
                 f"GKP Squeezing: QuTiP = {gkp_sq_qutip:.4f}, PyTorch = {gkp_sq_torch:.4f}"
             )
 
@@ -767,44 +898,67 @@ class GPUQuantumOps:
             assert np.allclose(cat_sq_qutip, cat_sq_torch.item(), atol=1e-4)
             assert np.allclose(gkp_sq_qutip, gkp_sq_torch.item(), atol=1e-4)
 
-        print("Verification successful!")
+        logger.info("Verification successful!")
 
-    def state_to_params_gpu(self, state):
+    def state_to_params_gpu(self, state: Tensor) -> Tensor:
         """
-        Converts a quantum state tensor to a parameters tensor.
+        Convert a quantum state tensor to optimization parameters.
+
+        This method splits a complex quantum state into its real and imaginary parts
+        for use in optimization algorithms that work with real-valued parameters.
 
         Args:
-            state (torch.Tensor): Normalized quantum state tensor
+            state (torch.Tensor): Normalized quantum state tensor.
+
         Returns:
-            torch.Tensor: Parameters tensor with real and imaginary parts
+            torch.Tensor: Parameter tensor with concatenated real and imaginary parts.
+            
+        Note:
+            The output tensor has twice the length of the input, with real parts
+            followed by imaginary parts.
         """
         real_parts = state.real
         imag_parts = state.imag
         params = torch.cat([real_parts, imag_parts], dim=1)
         return params
 
-    def state_to_qutip(self, state):
+    def state_to_qutip(self, state: Tensor) -> Qobj:
         """
-        Converts a PyTorch quantum state tensor to a Qutip Quantum object.
+        Convert a PyTorch quantum state tensor to a QuTiP Qobj.
+
+        This method facilitates interoperability between PyTorch and QuTiP by
+        converting GPU tensors to QuTiP quantum objects.
 
         Args:
-            state (torch.Tensor): Normalized quantum state tensor
+            state (torch.Tensor): Normalized quantum state tensor.
+
         Returns:
-            qutip.Qobj: Qutip Quantum object representing the state
+            qutip.Qobj: Normalized QuTiP quantum object representing the state.
+            
+        Note:
+            The state is automatically normalized using QuTiP's unit() method.
         """
-        real_parts = state.real.numpy()
-        imag_parts = state.imag.numpy()
+        real_parts = state.real.cpu().numpy()
+        imag_parts = state.imag.cpu().numpy()
         qstate = Qobj(real_parts + 1j * imag_parts)
         return qstate.unit()
 
-    def params_to_qutip(self, params):
+    def params_to_qutip(self, params: np.ndarray) -> Qobj:
         """
-        Converts a parameters tensor to a Qutip Quantum object.
+        Convert optimization parameters to a QuTiP quantum object.
+
+        This method reconstructs a quantum state from its real and imaginary parts
+        and returns it as a normalized QuTiP quantum object.
 
         Args:
-            params array: Parameters tensor with real and imaginary parts
+            params (numpy.ndarray): Parameter array with concatenated real and
+                imaginary parts.
+
         Returns:
-            qutip.Qobj: Qutip Quantum object representing the state
+            qutip.Qobj: Normalized QuTiP quantum object representing the state.
+            
+        Note:
+            Assumes params is structured as [real_parts, imag_parts] with equal lengths.
         """
         N = params.shape[0] // 2
         real_parts = params[:N]
@@ -812,14 +966,23 @@ class GPUQuantumOps:
         qstate = Qobj(real_parts + 1j * imag_parts)
         return qstate.unit()
 
-    def params_to_state_gpu(self, params):
+    def params_to_state_gpu(self, params: np.ndarray) -> Tensor:
         """
-        Converts parameters tensor to normalized quantum states tensor.
+        Convert optimization parameters to a normalized quantum state on GPU.
+
+        This method reconstructs a quantum state from its real and imaginary parts
+        and returns it as a normalized PyTorch tensor on the GPU.
 
         Args:
-            params (torch.Tensor): Input parameters tensor
+            params (numpy.ndarray): Parameter array with concatenated real and
+                imaginary parts.
+
         Returns:
-            torch.Tensor: Normalized quantum states tensor
+            torch.Tensor: Normalized quantum state tensor on GPU.
+            
+        Note:
+            - Assumes params is structured as [real_parts, imag_parts] with equal lengths
+            - Automatically moves the state to GPU and normalizes it
         """
         # Split into real and imaginary parts
         real_parts = torch.tensor(params[: params.shape[0] // 2]).cuda()
@@ -828,7 +991,7 @@ class GPUQuantumOps:
         # Create complex states using real-valued tensors
         state = torch.complex(real_parts.float(), imag_parts.float()).cuda()
 
-        print(state)
+        logger.debug(f"Created state from parameters: {state}")
 
         # Normalize states
         norms = torch.sqrt(torch.sum(torch.abs(state) ** 2))
@@ -836,31 +999,34 @@ class GPUQuantumOps:
 
         return state
 
-    def operator_new_gpu(self, u, phi, c, k):
+    def operator_new_gpu(
+        self,
+        u: float,
+        phi: float,
+        c: float,
+        k: int
+    ) -> Tensor:
         """
-        Generate a high-dimensional operator matrix and convert it to a GPU tensor.
+        Generate a quantum operator and convert it to a GPU tensor.
 
-        The operator is generated using the :func:`operator_new` function from
-        :mod:`qutip_quantum_ops` and converted to a GPU tensor using PyTorch.
+        This method creates a high-dimensional operator matrix using QuTiP's
+        operator_new function and converts it to a GPU tensor for efficient
+        computation.
 
-        Parameters
-        ----------
-        u : float
-            Displacement amplitude used in the preparation of the ideal state.
-        phi : float
-            A parameter used in the generation of the operator.
-        c : float
-            A parameter used in the generation of the operator.
-        k : int
-            A parameter used in the generation of the operator.
+        Args:
+            u (float): Displacement amplitude for the ideal state.
+            phi (float): Phase parameter for operator generation.
+            c (float): Code distance parameter.
+            k (int): Fock space cutoff parameter.
 
-        Returns
-        -------
-        torch.Tensor
-            The operator matrix as a GPU tensor.
+        Returns:
+            torch.Tensor: Operator matrix as a complex tensor on GPU.
+            
+        Note:
+            Uses QuTiP's operator_new function for initial construction,
+            then converts to GPU tensor for efficient computation.
         """
         op = operator_new(self.N, u, phi, c, k)
-        # Convert to GPU tensor
         return torch.tensor(op.full(), dtype=torch.complex64).cuda()
 
 
