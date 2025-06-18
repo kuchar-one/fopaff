@@ -53,6 +53,8 @@ You need to have the following software installed:
 
 2. Install the required Python packages:
    ```sh
+   python -m venv. venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
 
@@ -66,7 +68,7 @@ python fopaff.py --gpu_id 0 -N 30 -u 3 -c 10 -k 100 --pop_size 500 --max_generat
 
 This command will start the optimization process with the specified parameters. The results, including metrics and animations, will be saved in the `output` directory. Matrices utilized within the optimization can be found in the `cache` directory.
 
-## Possible Issues <a name = "issues"></a>
+## ❗ Possible Issues <a name = "issues"></a>
 
 On lower-end GPUs, the available VRAM might be insufficient for initializing many parallel workers. In that case, either lower the `num_workers` variable in `src.nsga_ii.optimize_quantum_state_gpu_cpu` or replace `src.nsga_ii` with `src.nsga_ii.lowend`.
 

@@ -642,6 +642,8 @@ def run(
     logger.info(f"Starting quantum state optimization run with parameters: N={N}, u={u}, c={c}, k={k}")
     logger.info(f"Optimization settings: pop_size={pop_size}, max_generations={max_generations}, tolerance={tolerance}, parity={parity}")
     
+    _ = p0_projector(N)
+    
     # Validate GPU availability
     if not torch.cuda.is_available():
         logger.error("No CUDA-capable GPU devices found")

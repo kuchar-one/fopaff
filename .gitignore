@@ -1,0 +1,16 @@
+# Cache directory
+cache/
+cache/**
+
+# Output directory
+output/
+output/**
+
+# Python cache files
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Python virtual environment
+.venv/
+venv/
