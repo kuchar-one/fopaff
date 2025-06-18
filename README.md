@@ -53,7 +53,7 @@ You need to have the following software installed:
 
 2. Install the required Python packages:
    ```sh
-   python -m venv. venv
+   python -m venv .venv
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
